@@ -279,7 +279,8 @@ void scenario_get_current_from_weather_palette(
 {
 	struct wind_state *state;
 
-	if (VALID_INDEX(weather_palette_index, wind_globals.count))
+	if (VALID_INDEX(weather_palette_index, wind_globals.count) &&
+		VALID_INDEX(weather_palette_index, global_structure_bsp_get()->weather_palette.count))
 	{
 		state = &wind_globals.wind_states[weather_palette_index];
 		if (state->valid)
@@ -289,35 +290,38 @@ void scenario_get_current_from_weather_palette(
 					&global_structure_bsp_get()->weather_palette,
 					weather_palette_index,
 					struct structure_weather_palette_entry);
-			struct wind_definition *definition =
-				wind_definition_get(weather_palette->wind.index);
-			real local_variation_weight =
-				TEST_FLAG(flags, _scenario_current_simple_bit)
-					? 0.f
-					: definition->local_variation_weight;
-			real_vector3d variance;
-
-			wind_variance_get(
-				position,
-				&variance,
-				definition->local_variation_rate,
-				definition->local_variation_weight * state->velocity);
-
-			current->i = state->velocity3d.i * (1.f - local_variation_weight)
-				+ variance.i;
-			current->j = state->velocity3d.j * (1.f - local_variation_weight)
-				+ variance.j;
-			current->k = state->velocity3d.k * (1.f - local_variation_weight)
-				+ variance.k;
-
-			if (TEST_FLAG(flags, _scenario_current_damped_bit))
+			if (weather_palette->wind.index != NONE)
 			{
-				current->i *= 1.f - definition->damping;
-				current->j *= 1.f - definition->damping;
-				current->k *= 1.f - definition->damping;
-			}
+				struct wind_definition *definition =
+					wind_definition_get(weather_palette->wind.index);
+				real local_variation_weight =
+					TEST_FLAG(flags, _scenario_current_simple_bit)
+						? 0.f
+						: definition->local_variation_weight;
+				real_vector3d variance;
 
-			return;
+				wind_variance_get(
+					position,
+					&variance,
+					definition->local_variation_rate,
+					definition->local_variation_weight * state->velocity);
+
+				current->i = state->velocity3d.i * (1.f - local_variation_weight)
+					+ variance.i;
+				current->j = state->velocity3d.j * (1.f - local_variation_weight)
+					+ variance.j;
+				current->k = state->velocity3d.k * (1.f - local_variation_weight)
+					+ variance.k;
+
+				if (TEST_FLAG(flags, _scenario_current_damped_bit))
+				{
+					current->i *= 1.f - definition->damping;
+					current->j *= 1.f - definition->damping;
+					current->k *= 1.f - definition->damping;
+				}
+
+				return;
+			}
 		}
 
 		*current = *global_zero_vector3d;
@@ -354,7 +358,8 @@ boolean scenario_get_current(
 	boolean in_water = FALSE;
 	short weather_palette_index = NONE;
 
-	if (location->cluster_index != NONE)
+	if (location->cluster_index != NONE &&
+		VALID_INDEX(location->cluster_index, global_structure_bsp_get()->clusters.count))
 	{
 		struct structure_bsp *structure_bsp = global_structure_bsp_get();
 		short fog_region_index = scenario_get_fog_region_index(

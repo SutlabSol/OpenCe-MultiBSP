@@ -660,6 +660,22 @@ static boolean particle_update_physics(
 			real_vector3d collision_normal;
 			short collision_material_type;
 			unsigned long collision_flags;
+			short previous_bsp = NONE;
+			short particle_bsp;
+
+			if (scenario_multi_bsp_active())
+			{
+				previous_bsp = scenario_get_active_bsp_index();
+				particle_bsp = scenario_find_bsp_for_point(&particle->position, NULL);
+				if (particle_bsp != NONE && particle_bsp != previous_bsp)
+				{
+					scenario_set_active_bsp_context(particle_bsp);
+				}
+				else
+				{
+					previous_bsp = NONE;
+				}
+			}
 
 			collision_flags = point_physics_update(
 				0,
@@ -722,6 +738,9 @@ static boolean particle_update_physics(
 					else
 						particle_delete(particle_index);
 
+					if (previous_bsp != NONE)
+						scenario_set_active_bsp_context(previous_bsp);
+
 					return FALSE;
 				}
 			}
@@ -735,8 +754,14 @@ static boolean particle_update_physics(
 			{
 				particle_die(particle_index);
 
+				if (previous_bsp != NONE)
+					scenario_set_active_bsp_context(previous_bsp);
+
 				return FALSE;
 			}
+
+			if (previous_bsp != NONE)
+				scenario_set_active_bsp_context(previous_bsp);
 
 			if (TEST_FLAG(collision_flags, _point_physics_collided_with_structure_bit) ||
 				TEST_FLAG(collision_flags, _point_physics_collided_with_water_bit))

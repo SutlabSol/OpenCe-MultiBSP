@@ -1094,6 +1094,8 @@ static void particle_system_update(
 	struct particle_system_definition *system_definition = particle_system_definition_get(system->definition_index);
 	short live_type_count = 0;
 	short type_index;
+	short previous_bsp = NONE;
+	short system_bsp = NONE;
 
 	if (system->object_index != NONE)
 	{
@@ -1114,6 +1116,27 @@ static void particle_system_update(
 		system->velocity.i *= TICKS_PER_SECOND;
 		system->velocity.j *= TICKS_PER_SECOND;
 		system->velocity.k *= TICKS_PER_SECOND;
+	}
+
+	if (scenario_multi_bsp_active())
+	{
+		previous_bsp = scenario_get_active_bsp_index();
+		if (system->object_index != NONE)
+		{
+			system_bsp = object_get_bsp_index(object_get_ultimate_parent(system->object_index));
+		}
+		if (system_bsp == NONE)
+		{
+			system_bsp = scenario_find_bsp_for_point(&system->position, NULL);
+		}
+		if (system_bsp != NONE && system_bsp != previous_bsp)
+		{
+			scenario_set_active_bsp_context(system_bsp);
+		}
+		else
+		{
+			previous_bsp = NONE;
+		}
 	}
 
 	match_assert(
@@ -1424,6 +1447,11 @@ static void particle_system_update(
 
 	if (live_type_count == 0 && system->object_index == NONE)
 		particle_system_delete(system_index);
+
+	if (previous_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
+	}
 
 	return;
 }

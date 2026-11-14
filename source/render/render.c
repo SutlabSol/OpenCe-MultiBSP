@@ -296,6 +296,11 @@ void render_frame_present(
 boolean render_location_visible(
 	struct location *location)
 {
+	if (location->cluster_index < 0 ||
+		location->cluster_index >= global_structure_bsp_get()->clusters.count)
+	{
+		return FALSE;
+	}
 	match_assert("c:\\halo\\SOURCE\\render\\render.c", 584, location->cluster_index>=0 && location->cluster_index<global_structure_bsp_get()->clusters.count);
 	return TEST_FLAG(render.visible_cluster_flags[location->cluster_index>>5], location->cluster_index&31);
 }

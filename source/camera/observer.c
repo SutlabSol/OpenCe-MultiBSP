@@ -1216,7 +1216,8 @@ static void observer_postcheck(
 		scenario_location_from_point(&location, &observer->result.position);
 		if (location.cluster_index != NONE)
 		{
-			if (location.cluster_index != observer->result.location.cluster_index)
+			if (location.cluster_index != observer->result.location.cluster_index &&
+				VALID_INDEX(location.cluster_index, global_structure_bsp_get()->clusters.count))
 			{
 				struct structure_cluster *cluster = TAG_BLOCK_GET_ELEMENT(
 					&global_structure_bsp_get()->clusters,

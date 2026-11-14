@@ -3104,9 +3104,12 @@ static real_point3d const *players_checkpoint_position(
 {
 	short index = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
 
-	if (players_checkpoint.valid && players_checkpoint.structure_bsp_index == global_structure_bsp_index_get())
+	if (players_checkpoint.valid &&
+		(players_checkpoint.structure_bsp_index == global_structure_bsp_index_get() ||
+			scenario_multi_bsp_active()))
 		return players_checkpoint.has_position[index] ? &players_checkpoint.positions[index] : NULL;
-	if (players_coop_state.ground_structure_bsp_index == global_structure_bsp_index_get() &&
+	if ((players_coop_state.ground_structure_bsp_index == global_structure_bsp_index_get() ||
+			scenario_multi_bsp_active()) &&
 		players_coop_state.has_ground_position[index])
 	{
 		return &players_coop_state.ground_positions[index];
@@ -3287,7 +3290,10 @@ static void players_coop_note_on_foot(
 	if (players_coop_state.ground_structure_bsp_index != global_structure_bsp_index_get())
 	{
 		players_coop_state.ground_structure_bsp_index = global_structure_bsp_index_get();
-		csmemset(players_coop_state.has_ground_position, 0, sizeof(players_coop_state.has_ground_position));
+		if (!scenario_multi_bsp_active())
+		{
+			csmemset(players_coop_state.has_ground_position, 0, sizeof(players_coop_state.has_ground_position));
+		}
 	}
 	data_iterator_new(&iterator, player_data);
 	while ((player = data_iterator_next(&iterator)) != NULL)
@@ -5117,6 +5123,23 @@ void players_update_before_game(
 
 			if (player->unit_index != NONE && unit_controllable(player->unit_index))
 			{
+				short previous_bsp = NONE;
+				short player_bsp;
+
+				if (scenario_multi_bsp_active())
+				{
+					previous_bsp = scenario_get_active_bsp_index();
+					player_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+					if (player_bsp != NONE && player_bsp != previous_bsp)
+					{
+						scenario_set_active_bsp_context(player_bsp);
+					}
+					else
+					{
+						previous_bsp = NONE;
+					}
+				}
+
 				unit = unit_get(player->unit_index);
 				if (!players_globals->input_disabled)
 				{
@@ -5221,6 +5244,11 @@ void players_update_before_game(
 					inhibited_control_data.primary_trigger = 0.f;
 					inhibited_control_data.looking_vector = unit->unit.desired_looking_vector;
 					unit_control(player->unit_index, &inhibited_control_data);
+				}
+
+				if (previous_bsp != NONE)
+				{
+					scenario_set_active_bsp_context(previous_bsp);
 				}
 			}
 		}
@@ -5339,8 +5367,12 @@ void players_update_after_game(
 
 		if (player->unit_index != NONE)
 		{
+			short previous_bsp = NONE;
+			short player_bsp;
+
 			root_object_index = object_get_ultimate_parent(player->unit_index);
 			root_object = object_get(root_object_index);
+			player_bsp = object_get_bsp_index(root_object_index);
 			/* port: a dedicated co-op server's player standing in a zone
 			while the cooldown runs is told when it opens */
 			if (network_coop_active() && network_coop_bsp_switch_majority() && !players_coop_bsp_switch_ready() &&
@@ -5368,8 +5400,11 @@ void players_update_after_game(
 						&scenario->bsp_switch_trigger_volumes,
 						bsp_switch_trigger_volume_index,
 						struct scenario_bsp_switch_trigger_volume);
-					if (bsp_switch_trigger_volume->source_structure_bsp_index ==
-						global_structure_bsp_index &&
+					if ((bsp_switch_trigger_volume->source_structure_bsp_index ==
+						global_structure_bsp_index ||
+						(scenario_multi_bsp_active() &&
+							bsp_switch_trigger_volume->source_structure_bsp_index == player_bsp &&
+							bsp_switch_trigger_volume->destination_structure_bsp_index > global_structure_bsp_index)) &&
 						scenario_trigger_volume_test_object(
 							bsp_switch_trigger_volume->trigger_volume_index,
 							player->unit_index) &&
@@ -5397,10 +5432,31 @@ void players_update_after_game(
 					}
 				}
 			}
-		}
 
-		player_reset_action_result(iterator.datum_index);
-		player_examine_nearby_objects(iterator.datum_index);
+			if (scenario_multi_bsp_active())
+			{
+				previous_bsp = scenario_get_active_bsp_index();
+				if (player_bsp != NONE && player_bsp != previous_bsp)
+				{
+					scenario_set_active_bsp_context(player_bsp);
+				}
+				else
+				{
+					previous_bsp = NONE;
+				}
+			}
+			player_reset_action_result(iterator.datum_index);
+			player_examine_nearby_objects(iterator.datum_index);
+			if (previous_bsp != NONE)
+			{
+				scenario_set_active_bsp_context(previous_bsp);
+			}
+		}
+		else
+		{
+			player_reset_action_result(iterator.datum_index);
+			player_examine_nearby_objects(iterator.datum_index);
+		}
 	}
 
 	if (players_globals->local_player_triggered_switch !=

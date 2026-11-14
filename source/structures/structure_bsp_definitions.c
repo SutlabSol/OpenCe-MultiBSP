@@ -46,11 +46,6 @@ unsigned long *structure_bsp_get_cluster_pvs(
 	struct structure_bsp *structure_bsp,
 	short cluster_index)
 {
-	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 36, cluster_index>=0 && cluster_index<structure_bsp->clusters.count);
-	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c",
-		37,
-		(cluster_index+1)*BIT_VECTOR_SIZE_IN_LONGS(structure_bsp->clusters.count)<=structure_bsp->cluster_data.size);
-
 	if (cluster_index < 0 ||
 		cluster_index >= structure_bsp->clusters.count ||
 		structure_bsp->clusters.count > MAXIMUM_CLUSTERS_PER_STRUCTURE ||
@@ -59,6 +54,11 @@ unsigned long *structure_bsp_get_cluster_pvs(
 	{
 		return structure_bsp_empty_cluster_pvs;
 	}
+
+	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 36, cluster_index>=0 && cluster_index<structure_bsp->clusters.count);
+	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c",
+		37,
+		(cluster_index+1)*BIT_VECTOR_SIZE_IN_LONGS(structure_bsp->clusters.count)<=structure_bsp->cluster_data.size);
 
 	// Get pointer to bitvector starting at the cluster index
 	return (unsigned long *)(
@@ -214,9 +214,6 @@ byte *structure_bsp_get_cluster_encoded_sound_data(
 {
 	long offset = row_index * (structure_bsp->clusters.count-1)-row_index*(row_index+1)/2+column_index-1;
 
-	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1202, row_index<column_index);
-	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1203, offset>=0 && offset<structure_bsp->sound_cluster_data.size);
-
 	if (row_index < 0 ||
 		row_index >= column_index ||
 		column_index >= structure_bsp->clusters.count ||
@@ -225,6 +222,9 @@ byte *structure_bsp_get_cluster_encoded_sound_data(
 	{
 		return NULL;
 	}
+
+	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1202, row_index<column_index);
+	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1203, offset>=0 && offset<structure_bsp->sound_cluster_data.size);
 
 	return &((byte *)structure_bsp->sound_cluster_data.address)[offset];
 }
@@ -235,6 +235,14 @@ byte structure_bsp_get_cluster_encoded_sound_distance(
 	short to_cluster_index)
 {
 	byte result;
+
+	if (from_cluster_index < 0 ||
+		from_cluster_index >= structure_bsp->clusters.count ||
+		to_cluster_index < 0 ||
+		to_cluster_index >= structure_bsp->clusters.count)
+	{
+		return UNSIGNED_CHAR_MAX;
+	}
 
 	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1215, from_cluster_index>=0 && from_cluster_index<structure_bsp->clusters.count);
 	match_assert("c:\\halo\\SOURCE\\structures\\structure_bsp_definitions.c", 1216, to_cluster_index>=0 && to_cluster_index<structure_bsp->clusters.count);
