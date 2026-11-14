@@ -26,6 +26,7 @@ symbols in this file:
 #include "render_cameras_internal.h"
 #include "render_particles.h"
 #include "render_sprite.h"
+#include "scenario/scenario.h"
 #include "tag_files/tag_groups.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
@@ -161,12 +162,26 @@ void render_particles(
 			struct particle_datum *particle = particle_get(particle_index);
 			boolean owned_by_local_player =
 				particle->local_player_index == local_player_index;
+			short visible_cluster_index = particle->location.cluster_index;
+			boolean location_visible = render_location_visible(&particle->location);
+
+			if (!location_visible && scenario_multi_bsp_active())
+			{
+				struct location alt_location;
+
+				scenario_location_from_point(&alt_location, &particle->position);
+				if (render_location_visible(&alt_location))
+				{
+					location_visible = TRUE;
+					visible_cluster_index = alt_location.cluster_index;
+				}
+			}
 
 			/* port: particle_drawn holds back a particle until a tick's
 			update has passed, as the Xbox's frame a tick did */
 			/* port: not the first-person weapon's with it hidden (view_fov.c) */
 			if (particle_drawn(particle_index) &&
-				render_location_visible(&particle->location) &&
+				location_visible &&
 				viewmodel_draws_geometry(owned_by_local_player &&
 					TEST_FLAG(particle->flags, _particle_datum_dont_draw_third_person_bit)) &&
 				(!TEST_FLAG(
@@ -185,7 +200,7 @@ void render_particles(
 				rendered_particle->definition_index =
 					(short)particle->definition_index;
 				rendered_particle->cluster_index =
-					particle->location.cluster_index;
+					visible_cluster_index;
 				/* port: a charge stuck to the viewmodel is drawn with it.
 				One that also shows on the body was left on the world's
 				view, and the near plane cut it down. */

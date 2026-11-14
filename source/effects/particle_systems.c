@@ -1765,9 +1765,23 @@ void particle_systems_render(
 			system_index = data_next_index(particle_systems, system_index))
 		{
 			struct particle_system_datum const *system = particle_system_get(system_index);
+			boolean visible =
+				system->location.cluster_index != NONE &&
+				scenario_location_potentially_visible_local(&system->location);
 
-			if (system->location.cluster_index != NONE &&
-				scenario_location_potentially_visible_local(&system->location))
+			if (!visible && scenario_multi_bsp_active())
+			{
+				struct location alt_location;
+
+				scenario_location_from_point(&alt_location, &system->position);
+				if (alt_location.cluster_index != NONE &&
+					scenario_location_potentially_visible_local(&alt_location))
+				{
+					visible = TRUE;
+				}
+			}
+
+			if (visible)
 			{
 				particle_system_render(system_index);
 			}

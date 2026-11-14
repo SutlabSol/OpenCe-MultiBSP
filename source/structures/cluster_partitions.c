@@ -67,6 +67,8 @@ symbols in this file:
 #include "memory/data.h"
 #include "objects/objects.h"
 #include "objects/reference_lists.h"
+#include "physics/collision_bsp.h"
+#include "physics/collision_bsp_definitions.h"
 #include "saved games/game_state.h"
 #include "scenario/scenario.h"
 #include "cluster_partitions.h"
@@ -411,13 +413,33 @@ long cluster_partition_get_first_cluster(
 {
 	*reference_index = first_cluster_reference;
 
-	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
+	return cluster_partition_get_next_cluster(partition, reference_index);
 }
 
 long cluster_partition_get_next_cluster(
 	struct cluster_partition const *partition,
 	long *reference_index)
 {
+	if (scenario_multi_bsp_active() && partition->port_cluster_reference_bsp)
+	{
+		short const active_bsp = scenario_get_active_bsp_index();
+
+		while (*reference_index != NONE)
+		{
+			long const current_ref = *reference_index;
+			long const cluster_index = reference_list_get_next_datum_index(
+				partition->cluster_reference_data,
+				reference_index);
+
+			if (partition->port_cluster_reference_bsp[DATUM_INDEX_TO_ABSOLUTE_INDEX(current_ref)] == active_bsp)
+			{
+				return cluster_index;
+			}
+		}
+
+		return NONE;
+	}
+
 	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
 }
 
@@ -432,12 +454,15 @@ void cluster_partition_reconnect(
 	short cluster_indices[64];
 	short cluster_count;
 	short cluster_index_index;
+	short primary_bsp;
 
 	match_assert("c:\\halo\\SOURCE\\structures\\cluster_partitions.c", 0x6f, partition);
 	match_assert("c:\\halo\\SOURCE\\structures\\cluster_partitions.c", 0x70, first_cluster_reference);
 	match_assert("c:\\halo\\SOURCE\\structures\\cluster_partitions.c", 0x71, *first_cluster_reference==NONE);
 	match_assert("c:\\halo\\SOURCE\\structures\\cluster_partitions.c", 0x72, position);
 	match_assert("c:\\halo\\SOURCE\\structures\\cluster_partitions.c", 0x73, location);
+
+	primary_bsp = scenario_get_active_bsp_index();
 
 	cluster_count = structure_clusters_in_sphere(
 		location->cluster_index,
@@ -455,7 +480,7 @@ void cluster_partition_reconnect(
 	for (cluster_index_index = 0; cluster_index_index < cluster_count; cluster_index_index++)
 	{
 		short const cluster_index = cluster_indices[cluster_index_index];
-		short const bsp_index = scenario_get_active_bsp_index();
+		short const bsp_index = primary_bsp;
 		/* port: reference_list_add's, noting where the references are */
 		long cluster_reference_index = cluster_partition_port_add(
 			partition->cluster_reference_data,
@@ -481,6 +506,137 @@ void cluster_partition_reconnect(
 				partition->port_cluster_reference_bsp[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
 					bsp_index;
 			}
+		}
+	}
+
+	/* Multi-BSP: also connect objects and lights located in BSP transition/overlap
+	   zones into every other loaded BSP whose geometry contains or intersects the
+	   bounding sphere, so doors, controls, scenery, weapons, units, projectiles,
+	   and dynamic lights in overlap corridors remain visible from either BSP. */
+	if (scenario_multi_bsp_active())
+	{
+		short other_bsp;
+		boolean switched_bsp = FALSE;
+
+		for (other_bsp = 0; other_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; other_bsp++)
+		{
+			short other_cluster_index = NONE;
+			struct location other_location;
+			struct structure_bsp const *other_structure_bsp;
+
+			if (other_bsp == primary_bsp || !scenario_bsp_index_is_loaded(other_bsp))
+			{
+				continue;
+			}
+
+			other_structure_bsp = scenario_structure_bsp_get_by_index(other_bsp);
+			if (!other_structure_bsp)
+			{
+				continue;
+			}
+
+			if (scenario_test_point_in_bsp(other_bsp, position, &other_location) &&
+				other_location.cluster_index >= 0 &&
+				other_location.cluster_index < other_structure_bsp->clusters.count)
+			{
+				other_cluster_index = other_location.cluster_index;
+			}
+			else if (radius > 0.f)
+			{
+				struct collision_bsp const *other_collision_bsp =
+					scenario_collision_bsp_get_by_index(other_bsp);
+
+				if (other_collision_bsp)
+				{
+					struct collision_bsp_test_sphere_result sphere_result;
+					long leaf_i;
+
+					collision_bsp_test_sphere(
+						other_collision_bsp,
+						0,
+						NULL,
+						position,
+						radius,
+						&sphere_result);
+
+					for (leaf_i = 0; leaf_i < sphere_result.leaf_count; leaf_i++)
+					{
+						long const leaf_idx = sphere_result.leaf_indices[leaf_i];
+
+						if (leaf_idx >= 0 && leaf_idx < other_structure_bsp->leaves.count)
+						{
+							struct structure_leaf const *leaf = TAG_BLOCK_GET_ELEMENT(
+								&other_structure_bsp->leaves,
+								leaf_idx,
+								struct structure_leaf);
+
+							if (leaf->cluster_index >= 0 &&
+								leaf->cluster_index < other_structure_bsp->clusters.count)
+							{
+								other_cluster_index = leaf->cluster_index;
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			if (other_cluster_index != NONE)
+			{
+				short other_cluster_indices[64];
+				short other_cluster_count;
+				short other_i;
+
+				scenario_set_active_bsp_context(other_bsp);
+				switched_bsp = TRUE;
+
+				other_cluster_count = structure_clusters_in_sphere(
+					other_cluster_index,
+					position,
+					radius,
+					NUMBEROF(other_cluster_indices),
+					other_cluster_indices);
+
+				if (other_cluster_count > 64)
+				{
+					other_cluster_count = NUMBEROF(other_cluster_indices);
+				}
+
+				for (other_i = 0; other_i < other_cluster_count; other_i++)
+				{
+					short const c_idx = other_cluster_indices[other_i];
+					long cluster_reference_index = cluster_partition_port_add(
+						partition->cluster_reference_data,
+						first_cluster_reference,
+						c_idx,
+						NULL);
+					long data_reference_index = cluster_partition_port_add(
+						partition->data_reference_data,
+						cluster_partition_get_first_reference_for_bsp(partition, other_bsp, c_idx),
+						datum_index,
+						partition->port_previous_references);
+
+					partition->port_modification_count++;
+					if (cluster_reference_index != NONE)
+					{
+						if (partition->port_cluster_data_references)
+						{
+							partition->port_cluster_data_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
+								data_reference_index;
+						}
+						if (partition->port_cluster_reference_bsp)
+						{
+							partition->port_cluster_reference_bsp[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
+								other_bsp;
+						}
+					}
+				}
+			}
+		}
+
+		if (switched_bsp)
+		{
+			scenario_set_active_bsp_context(primary_bsp);
 		}
 	}
 
