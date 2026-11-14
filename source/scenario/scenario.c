@@ -381,6 +381,13 @@ boolean scenario_test_point_in_bsp(
 	if (!bsp || !bsp3d)
 		return FALSE;
 
+	if (point->x < bsp->world_bounds.x0 || point->x > bsp->world_bounds.x1 ||
+		point->y < bsp->world_bounds.y0 || point->y > bsp->world_bounds.y1 ||
+		point->z < bsp->world_bounds.z0 || point->z > bsp->world_bounds.z1)
+	{
+		return FALSE;
+	}
+
 	leaf_index = bsp3d_test_point(bsp3d, 0, point);
 	if (leaf_index == NONE || (leaf_index & LONG_MAX) >= bsp->leaves.count)
 		return FALSE;

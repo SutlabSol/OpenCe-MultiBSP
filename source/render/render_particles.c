@@ -169,8 +169,8 @@ void render_particles(
 			{
 				struct location alt_location;
 
-				scenario_location_from_point(&alt_location, &particle->position);
-				if (render_location_visible(&alt_location))
+				if (scenario_test_point_in_bsp(scenario_get_active_bsp_index(), &particle->position, &alt_location) &&
+					render_location_visible(&alt_location))
 				{
 					location_visible = TRUE;
 					visible_cluster_index = alt_location.cluster_index;

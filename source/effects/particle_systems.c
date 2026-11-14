@@ -1100,8 +1100,13 @@ static void particle_system_update(
 	if (system->object_index != NONE)
 	{
 		struct object_datum *object = object_get(system->object_index);
+		long root_object_index = object_get_ultimate_parent(system->object_index);
+		struct object_header_datum const *root_header = object_header_get(root_object_index);
+		boolean parent_active = !scenario_multi_bsp_active() ||
+			TEST_FLAG(root_header->flags, _object_header_active_bit);
 
-		if (TEST_FLAG(object->object.flags, _object_connected_to_map_bit) &&
+		if (parent_active &&
+			TEST_FLAG(object->object.flags, _object_connected_to_map_bit) &&
 			object_get_function_value(system->object_index, system->function_index, &system->scale))
 		{
 			SET_FLAG(system->flags, _particle_system_active_bit, TRUE);
@@ -1109,6 +1114,29 @@ static void particle_system_update(
 		else
 		{
 			SET_FLAG(system->flags, _particle_system_active_bit, FALSE);
+		}
+
+		if (scenario_multi_bsp_active() &&
+			!TEST_FLAG(system->flags, _particle_system_active_bit) &&
+			!TEST_FLAG(system->flags, _particle_system_initializing_bit))
+		{
+			boolean any_live_particles = FALSE;
+
+			for (type_index = 0;
+				type_index < system_definition->types.count && type_index < MAXIMUM_PARTICLE_SYSTEM_TYPES_PER_SYSTEM;
+				type_index++)
+			{
+				if (system->types[type_index].first_particle_index != NONE)
+				{
+					any_live_particles = TRUE;
+					break;
+				}
+			}
+
+			if (!any_live_particles)
+			{
+				return;
+			}
 		}
 
 		object_get_origin(system->object_index, &system->position);
@@ -1765,16 +1793,33 @@ void particle_systems_render(
 			system_index = data_next_index(particle_systems, system_index))
 		{
 			struct particle_system_datum const *system = particle_system_get(system_index);
-			boolean visible =
-				system->location.cluster_index != NONE &&
-				scenario_location_potentially_visible_local(&system->location);
+			boolean visible = FALSE;
 
-			if (!visible && scenario_multi_bsp_active())
+			if (!scenario_multi_bsp_active())
 			{
+				visible =
+					system->location.cluster_index != NONE &&
+					scenario_location_potentially_visible_local(&system->location);
+			}
+			else
+			{
+				short active_bsp = scenario_get_active_bsp_index();
+				short system_bsp = NONE;
 				struct location alt_location;
 
-				scenario_location_from_point(&alt_location, &system->position);
-				if (alt_location.cluster_index != NONE &&
+				if (system->object_index != NONE)
+				{
+					system_bsp = object_get_bsp_index(object_get_ultimate_parent(system->object_index));
+				}
+
+				if (system_bsp == active_bsp &&
+					system->location.cluster_index != NONE &&
+					scenario_location_potentially_visible_local(&system->location))
+				{
+					visible = TRUE;
+				}
+				else if (scenario_test_point_in_bsp(active_bsp, &system->position, &alt_location) &&
+					alt_location.cluster_index != NONE &&
 					scenario_location_potentially_visible_local(&alt_location))
 				{
 					visible = TRUE;

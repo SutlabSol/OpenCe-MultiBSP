@@ -535,6 +535,16 @@ void cluster_partition_reconnect(
 				continue;
 			}
 
+			if (position->x + radius < other_structure_bsp->world_bounds.x0 ||
+				position->x - radius > other_structure_bsp->world_bounds.x1 ||
+				position->y + radius < other_structure_bsp->world_bounds.y0 ||
+				position->y - radius > other_structure_bsp->world_bounds.y1 ||
+				position->z + radius < other_structure_bsp->world_bounds.z0 ||
+				position->z - radius > other_structure_bsp->world_bounds.z1)
+			{
+				continue;
+			}
+
 			if (scenario_test_point_in_bsp(other_bsp, position, &other_location) &&
 				other_location.cluster_index >= 0 &&
 				other_location.cluster_index < other_structure_bsp->clusters.count)
@@ -543,40 +553,32 @@ void cluster_partition_reconnect(
 			}
 			else if (radius > 0.f)
 			{
-				struct collision_bsp const *other_collision_bsp =
-					scenario_collision_bsp_get_by_index(other_bsp);
-
-				if (other_collision_bsp)
+				static real const probe_dirs[6][3] =
 				{
-					struct collision_bsp_test_sphere_result sphere_result;
-					long leaf_i;
+					{  1.f,  0.f,  0.f },
+					{ -1.f,  0.f,  0.f },
+					{  0.f,  1.f,  0.f },
+					{  0.f, -1.f,  0.f },
+					{  0.f,  0.f,  1.f },
+					{  0.f,  0.f, -1.f }
+				};
+				real const probe_radius = MIN(radius, 0.5f);
+				short probe_i;
 
-					collision_bsp_test_sphere(
-						other_collision_bsp,
-						0,
-						NULL,
-						position,
-						radius,
-						&sphere_result);
+				for (probe_i = 0; probe_i < 6; probe_i++)
+				{
+					real_point3d probe_pt;
 
-					for (leaf_i = 0; leaf_i < sphere_result.leaf_count; leaf_i++)
+					probe_pt.x = position->x + probe_dirs[probe_i][0] * probe_radius;
+					probe_pt.y = position->y + probe_dirs[probe_i][1] * probe_radius;
+					probe_pt.z = position->z + probe_dirs[probe_i][2] * probe_radius;
+
+					if (scenario_test_point_in_bsp(other_bsp, &probe_pt, &other_location) &&
+						other_location.cluster_index >= 0 &&
+						other_location.cluster_index < other_structure_bsp->clusters.count)
 					{
-						long const leaf_idx = sphere_result.leaf_indices[leaf_i];
-
-						if (leaf_idx >= 0 && leaf_idx < other_structure_bsp->leaves.count)
-						{
-							struct structure_leaf const *leaf = TAG_BLOCK_GET_ELEMENT(
-								&other_structure_bsp->leaves,
-								leaf_idx,
-								struct structure_leaf);
-
-							if (leaf->cluster_index >= 0 &&
-								leaf->cluster_index < other_structure_bsp->clusters.count)
-							{
-								other_cluster_index = leaf->cluster_index;
-								break;
-							}
-						}
+						other_cluster_index = other_location.cluster_index;
+						break;
 					}
 				}
 			}

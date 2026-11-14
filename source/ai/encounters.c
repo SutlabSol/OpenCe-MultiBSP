@@ -4209,27 +4209,31 @@ static void encounters_test_activation(
 			scenario_bsp_index_is_loaded(encounter_definition->runtime_structure_bsp_reference_index))
 		{
 			unsigned long bsp_pvs[BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_CLUSTERS_PER_STRUCTURE)];
-			short previous_bsp = scenario_get_active_bsp_index();
 			short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
-			struct structure_bsp *encounter_structure_bsp = scenario_structure_bsp_get_by_index(encounter_bsp);
+			boolean has_players_in_bsp = players_compute_combined_pvs_for_bsp(encounter_bsp, bsp_pvs);
 
-			scenario_set_active_bsp_context(encounter_bsp);
-			players_compute_combined_pvs_for_bsp(encounter_bsp, bsp_pvs);
-			encounter_compute_activation_cluster_bit_vector(
-				iterator.datum_index,
-				TRUE,
-				MAXIMUM_CLUSTERS_PER_STRUCTURE,
-				bsp_pvs,
-				activation_cluster_bit_vector);
-			if (encounter_structure_bsp)
+			if (has_players_in_bsp || encounter->active || active)
 			{
-				active |= bit_vector_and(
-					encounter_structure_bsp->clusters.count,
+				short previous_bsp = scenario_get_active_bsp_index();
+				struct structure_bsp *encounter_structure_bsp = scenario_structure_bsp_get_by_index(encounter_bsp);
+
+				scenario_set_active_bsp_context(encounter_bsp);
+				encounter_compute_activation_cluster_bit_vector(
+					iterator.datum_index,
+					TRUE,
+					MAXIMUM_CLUSTERS_PER_STRUCTURE,
 					bsp_pvs,
-					activation_cluster_bit_vector,
-					NULL);
+					activation_cluster_bit_vector);
+				if (has_players_in_bsp && encounter_structure_bsp)
+				{
+					active |= bit_vector_and(
+						encounter_structure_bsp->clusters.count,
+						bsp_pvs,
+						activation_cluster_bit_vector,
+						NULL);
+				}
+				scenario_set_active_bsp_context(previous_bsp);
 			}
-			scenario_set_active_bsp_context(previous_bsp);
 		}
 		else
 		{

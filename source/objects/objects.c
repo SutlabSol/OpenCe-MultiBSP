@@ -238,6 +238,8 @@ static struct object_globals *object_globals = NULL;
 static struct object_function_inputs object_function_inputs[MAXIMUM_OBJECTS_PER_MAP];
 /* port: the structure BSP index each object is currently connected to */
 static short object_bsp_index[MAXIMUM_OBJECTS_PER_MAP];
+static unsigned long multi_bsp_last_active_cluster_bits[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO][BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_CLUSTERS_PER_STRUCTURE)];
+static unsigned long multi_bsp_active_cluster_bits[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO][BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_CLUSTERS_PER_STRUCTURE)];
 
 short object_get_bsp_index(
 	long object_index)
@@ -1242,6 +1244,8 @@ void objects_initialize_for_new_map(
 	vehicle_riding_objects_reset();
 	object_name_list_clear();
 	csmemset(object_bsp_index, 0xFF, sizeof(object_bsp_index));
+	csmemset(multi_bsp_last_active_cluster_bits, 0, sizeof(multi_bsp_last_active_cluster_bits));
+	csmemset(multi_bsp_active_cluster_bits, 0, sizeof(multi_bsp_active_cluster_bits));
 
 	cluster_partition_make_valid(&collideable_object_cluster_partition);
 	cluster_partition_make_valid(&noncollideable_object_cluster_partition);
@@ -2170,14 +2174,23 @@ void object_reconnect_to_map(
 
 			if (!location)
 			{
-				found_bsp = scenario_find_bsp_for_point(&object->object.bounding_sphere_center, &bounding_sphere_location);
-				if (found_bsp == NONE)
-					found_bsp = scenario_find_bsp_for_point(&object->object.position, &bounding_sphere_location);
-				if (found_bsp != NONE)
+				if (scenario_bsp_index_is_loaded(obj_bsp) &&
+					(scenario_test_point_in_bsp(obj_bsp, &object->object.bounding_sphere_center, &bounding_sphere_location) ||
+					 scenario_test_point_in_bsp(obj_bsp, &object->object.position, &bounding_sphere_location)))
 				{
-					obj_bsp = found_bsp;
-					scenario_set_active_bsp_context(obj_bsp);
 					location = &bounding_sphere_location;
+				}
+				else
+				{
+					found_bsp = scenario_find_bsp_for_point(&object->object.bounding_sphere_center, &bounding_sphere_location);
+					if (found_bsp == NONE)
+						found_bsp = scenario_find_bsp_for_point(&object->object.position, &bounding_sphere_location);
+					if (found_bsp != NONE)
+					{
+						obj_bsp = found_bsp;
+						scenario_set_active_bsp_context(obj_bsp);
+						location = &bounding_sphere_location;
+					}
 				}
 			}
 			else if (location->cluster_index == NONE ||
@@ -2243,8 +2256,32 @@ void object_reconnect_to_map(
 
 		if (TEST_FLAG(header->flags, _object_header_automatically_deactivate_bit))
 		{
-			if (header->cluster_index==NONE ||
-				(!scenario_multi_bsp_active() && !BIT_VECTOR_TEST_FLAG(players_get_combined_pvs(), header->cluster_index)))
+			boolean cluster_is_active = FALSE;
+
+			if (header->cluster_index != NONE)
+			{
+				if (!scenario_multi_bsp_active())
+				{
+					cluster_is_active = BIT_VECTOR_TEST_FLAG(players_get_combined_pvs(), header->cluster_index) != 0;
+				}
+				else if (obj_bsp >= 0 && obj_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+				{
+					struct structure_bsp const *obj_structure_bsp = scenario_structure_bsp_get_by_index(obj_bsp);
+
+					if (obj_structure_bsp &&
+						header->cluster_index >= 0 &&
+						header->cluster_index < obj_structure_bsp->clusters.count)
+					{
+						cluster_is_active = BIT_VECTOR_TEST_FLAG(multi_bsp_active_cluster_bits[obj_bsp], header->cluster_index) != 0;
+						if (!cluster_is_active && obj_bsp == global_structure_bsp_index)
+						{
+							cluster_is_active = BIT_VECTOR_TEST_FLAG(players_get_combined_pvs(), header->cluster_index) != 0;
+						}
+					}
+				}
+			}
+
+			if (!cluster_is_active)
 			{
 				if (TEST_FLAG(object->object.flags, _object_deleted_when_deactivated_bit))
 				{
@@ -4836,49 +4873,183 @@ void objects_update(
 	memcpy(last_active_cluster_bits, active_cluster_bits, BIT_VECTOR_SIZE_IN_BYTES(cluster_count));
 	memcpy(active_cluster_bits, players_get_combined_pvs(), BIT_VECTOR_SIZE_IN_BYTES(cluster_count));
 
-	if (csmemcmp(last_active_cluster_bits, active_cluster_bits, BIT_VECTOR_SIZE_IN_BYTES(cluster_count)))
+	if (!scenario_multi_bsp_active())
 	{
-		object_header = (struct object_header_datum *)object_header_data->data;
-		for (i = 0; i<object_header_data->count; ++object_header)
+		if (csmemcmp(last_active_cluster_bits, active_cluster_bits, BIT_VECTOR_SIZE_IN_BYTES(cluster_count)))
 		{
-			if (object_header->identifier &&
-				TEST_FLAG(object_header->flags, _object_header_automatically_deactivate_bit) &&
-				TEST_FLAG(object_header->flags, _object_header_connected_to_map_bit))
+			object_header = (struct object_header_datum *)object_header_data->data;
+			for (i = 0; i<object_header_data->count; ++object_header)
 			{
-				if (TEST_FLAG(object_header->flags, _object_header_active_bit))
+				if (object_header->identifier &&
+					TEST_FLAG(object_header->flags, _object_header_automatically_deactivate_bit) &&
+					TEST_FLAG(object_header->flags, _object_header_connected_to_map_bit))
 				{
-					match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 369, object_header->cluster_index!=NONE);
-					if (!scenario_multi_bsp_active() &&
-						!BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
+					if (TEST_FLAG(object_header->flags, _object_header_active_bit))
 					{
-						if (TEST_FLAG(object_header->datum->object.flags, _object_deleted_when_deactivated_bit))
+						match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 369, object_header->cluster_index!=NONE);
+						if (!BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
 						{
-							object_delete_initial_recursive(i, FALSE);
-						}
-						else
-						{
-							object_deactivate(i);
+							if (TEST_FLAG(object_header->datum->object.flags, _object_deleted_when_deactivated_bit))
+							{
+								object_delete_initial_recursive(i, FALSE);
+							}
+							else
+							{
+								object_deactivate(i);
+							}
 						}
 					}
+					else if (
+						!TEST_FLAG(object_header->flags, _object_header_child_bit) &&
+						object_header->cluster_index != NONE &&
+						BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index)
+					)
+					{
+						object_activate(i);
+					}
 				}
-				else if (
-					!TEST_FLAG(object_header->flags, _object_header_child_bit) &&
-					object_header->cluster_index != NONE &&
-					(scenario_multi_bsp_active() ||
-						BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
-				)
+
+				++i;
+			}
+
+			structure_decals_update(
+				last_active_cluster_bits,
+				active_cluster_bits,
+				cluster_count);
+		}
+	}
+	else
+	{
+		short bsp_index;
+		boolean any_bsp_pvs_changed = FALSE;
+		short pvs_act_bsp = NONE;
+		short pvs_act_cluster = NONE;
+
+		if (object_globals->pvs_activation_type == _pvs_activation_object)
+		{
+			struct object_header_datum const *act_header =
+				object_header_try_and_get(object_globals->pvs_activation.object_index);
+
+			if (act_header && FLAG(act_header->type) && act_header->datum)
+			{
+				long root_act_index = object_get_ultimate_parent(object_globals->pvs_activation.object_index);
+				struct object_datum const *root_act_object = object_get(root_act_index);
+
+				if (TEST_FLAG(root_act_object->object.flags, _object_connected_to_map_bit))
 				{
-					object_activate(i);
+					pvs_act_bsp = object_get_bsp_index(root_act_index);
+					pvs_act_cluster = root_act_object->object.location.cluster_index;
+				}
+			}
+		}
+
+		for (bsp_index = 0; bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; bsp_index++)
+		{
+			struct structure_bsp *bsp_structure;
+			short bsp_cluster_count;
+
+			if (!scenario_bsp_index_is_loaded(bsp_index))
+			{
+				continue;
+			}
+
+			bsp_structure = scenario_structure_bsp_get_by_index(bsp_index);
+			if (!bsp_structure || bsp_structure->clusters.count <= 0)
+			{
+				continue;
+			}
+
+			bsp_cluster_count = (short)bsp_structure->clusters.count;
+			memcpy(
+				multi_bsp_last_active_cluster_bits[bsp_index],
+				multi_bsp_active_cluster_bits[bsp_index],
+				BIT_VECTOR_SIZE_IN_BYTES(bsp_cluster_count));
+
+			players_compute_combined_pvs_for_bsp(bsp_index, multi_bsp_active_cluster_bits[bsp_index]);
+
+			if (bsp_index == global_structure_bsp_index)
+			{
+				bit_vector_or(
+					bsp_cluster_count,
+					multi_bsp_active_cluster_bits[bsp_index],
+					active_cluster_bits,
+					multi_bsp_active_cluster_bits[bsp_index]);
+			}
+
+			if (pvs_act_bsp == bsp_index &&
+				pvs_act_cluster >= 0 &&
+				pvs_act_cluster < bsp_cluster_count)
+			{
+				bit_vector_or(
+					bsp_cluster_count,
+					multi_bsp_active_cluster_bits[bsp_index],
+					structure_bsp_get_cluster_pvs(bsp_structure, pvs_act_cluster),
+					multi_bsp_active_cluster_bits[bsp_index]);
+			}
+
+			if (csmemcmp(
+				multi_bsp_last_active_cluster_bits[bsp_index],
+				multi_bsp_active_cluster_bits[bsp_index],
+				BIT_VECTOR_SIZE_IN_BYTES(bsp_cluster_count)))
+			{
+				any_bsp_pvs_changed = TRUE;
+			}
+		}
+
+		if (any_bsp_pvs_changed)
+		{
+			object_header = (struct object_header_datum *)object_header_data->data;
+			for (i = 0; i < object_header_data->count; ++object_header, ++i)
+			{
+				if (object_header->identifier &&
+					TEST_FLAG(object_header->flags, _object_header_automatically_deactivate_bit) &&
+					TEST_FLAG(object_header->flags, _object_header_connected_to_map_bit))
+				{
+					short obj_bsp = (i >= 0 && i < MAXIMUM_OBJECTS_PER_MAP &&
+						scenario_bsp_index_is_loaded(object_bsp_index[i])) ?
+						object_bsp_index[i] : global_structure_bsp_index;
+					struct structure_bsp const *obj_structure_bsp =
+						scenario_structure_bsp_get_by_index(obj_bsp);
+					boolean in_active_pvs =
+						obj_bsp >= 0 &&
+						obj_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+						obj_structure_bsp &&
+						object_header->cluster_index >= 0 &&
+						object_header->cluster_index < obj_structure_bsp->clusters.count &&
+						BIT_VECTOR_TEST_FLAG(multi_bsp_active_cluster_bits[obj_bsp], object_header->cluster_index);
+
+					if (TEST_FLAG(object_header->flags, _object_header_active_bit))
+					{
+						if (!in_active_pvs)
+						{
+							if (TEST_FLAG(object_header->datum->object.flags, _object_deleted_when_deactivated_bit))
+							{
+								object_delete_initial_recursive(i, FALSE);
+							}
+							else
+							{
+								object_deactivate(i);
+							}
+						}
+					}
+					else if (
+						!TEST_FLAG(object_header->flags, _object_header_child_bit) &&
+						object_header->cluster_index != NONE &&
+						in_active_pvs)
+					{
+						object_activate(i);
+					}
 				}
 			}
 
-			++i;
+			if (csmemcmp(last_active_cluster_bits, active_cluster_bits, BIT_VECTOR_SIZE_IN_BYTES(cluster_count)))
+			{
+				structure_decals_update(
+					last_active_cluster_bits,
+					active_cluster_bits,
+					cluster_count);
+			}
 		}
-
-		structure_decals_update(
-			last_active_cluster_bits,
-			active_cluster_bits,
-			cluster_count);
 	}
 
 	/* port: the vehicles' touches of riders are kept for this tick's riders

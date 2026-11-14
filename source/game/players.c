@@ -1925,6 +1925,7 @@ boolean players_compute_combined_pvs_for_bsp(
 	struct player_datum *player;
 	struct structure_bsp *structure_bsp = scenario_structure_bsp_get_by_index(bsp_index);
 	boolean any_player = FALSE;
+	short local_player_index;
 
 	csmemset(combined_pvs, 0, 0x40);
 	if (!structure_bsp)
@@ -1967,6 +1968,49 @@ boolean players_compute_combined_pvs_for_bsp(
 						cluster_index),
 					combined_pvs);
 				any_player = TRUE;
+			}
+		}
+	}
+
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		if (local_player_exists(local_player_index))
+		{
+			struct observer_result const *camera = observer_get_camera(local_player_index);
+
+			if (camera)
+			{
+				struct location cam_location;
+				short cam_cluster = NONE;
+
+				if (scenario_test_point_in_bsp(bsp_index, &camera->position, &cam_location))
+				{
+					cam_cluster = cam_location.cluster_index;
+				}
+				else
+				{
+					real_point3d lookahead_pt;
+
+					point_from_line3d(&camera->position, &camera->forward, 2.5f, &lookahead_pt);
+					if (scenario_test_point_in_bsp(bsp_index, &lookahead_pt, &cam_location))
+					{
+						cam_cluster = cam_location.cluster_index;
+					}
+				}
+
+				if (cam_cluster != NONE &&
+					cam_cluster >= 0 &&
+					cam_cluster < structure_bsp->clusters.count)
+				{
+					bit_vector_or(
+						(short)structure_bsp->clusters.count,
+						combined_pvs,
+						structure_bsp_get_cluster_pvs(
+							structure_bsp,
+							cam_cluster),
+						combined_pvs);
+					any_player = TRUE;
+				}
 			}
 		}
 	}
