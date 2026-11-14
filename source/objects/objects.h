@@ -484,6 +484,7 @@ void objects_update(void);
 void object_count_update(long object_index);
 long object_update_count(long object_index);
 short object_get_bsp_index(long object_index);
+boolean object_switch_bsp(long object_index, short new_bsp_index);
 void objects_memory_compact(void);
 
 

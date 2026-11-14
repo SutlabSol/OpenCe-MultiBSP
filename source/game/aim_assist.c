@@ -528,14 +528,18 @@ boolean aim_assist(
 	short ignore_team_index,
 	struct aim_assist_target *target)
 {
+	long leaf_index;
+
 	/* port: Hardcore has no aim assist: no autoaim, no magnetism */
 	if (game_modes_aim_assist_off())
 		return FALSE;
-	if (scenario_leaf_index_from_point(position)!=NONE)
+	leaf_index = scenario_leaf_index_from_point(position);
+	if (leaf_index != NONE &&
+		VALID_INDEX(leaf_index & LONG_MAX, global_structure_bsp_get()->leaves.count))
 	{
 		short cluster_index= TAG_BLOCK_GET_ELEMENT(
 			&global_structure_bsp_get()->leaves,
-			scenario_leaf_index_from_point(position) & LONG_MAX,
+			leaf_index & LONG_MAX,
 			struct structure_leaf)->cluster_index;
 
 		if (cluster_index!=NONE)
@@ -576,6 +580,17 @@ long player_aim_projectile_preview(
 	struct player_datum *player= player_get(player_index);
 	long aiming_unit_index= unit_get_aiming_unit_index(player->unit_index);
 	struct aim_assist_parameters parameters;
+	short previous_bsp = NONE;
+
+	if (scenario_multi_bsp_active() && player->unit_index != NONE)
+	{
+		short target_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+		previous_bsp = scenario_get_active_bsp_index();
+		if (target_bsp != NONE && target_bsp != previous_bsp)
+			scenario_set_active_bsp_context(target_bsp);
+		else
+			previous_bsp = NONE;
+	}
 
 	match_assert_valid_real_normal3d(
 		"c:\\halo\\SOURCE\\game\\aim_assist.c",
@@ -659,6 +674,9 @@ long player_aim_projectile_preview(
 		global_current_collision_user_depth > 1);
 	--global_current_collision_user_depth;
 
+	if (previous_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
+
 	return target_object_index;
 }
 
@@ -693,6 +711,17 @@ long local_player_aim_assist(
 		struct player_datum *player= player_get(local_player_get_player_index(local_player_index));
 		long aiming_unit_index= unit_get_aiming_unit_index(player->unit_index);
 		struct aim_assist_parameters parameters;
+		short previous_bsp = NONE;
+
+		if (scenario_multi_bsp_active() && player->unit_index != NONE)
+		{
+			short target_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+			previous_bsp = scenario_get_active_bsp_index();
+			if (target_bsp != NONE && target_bsp != previous_bsp)
+				scenario_set_active_bsp_context(target_bsp);
+			else
+				previous_bsp = NONE;
+		}
 
 		if (unit_get_aim_assist_parameters(aiming_unit_index, player_control_get_zoom_level(local_player_index), &parameters))
 		{
@@ -733,6 +762,9 @@ long local_player_aim_assist(
 				target_index= target.object_index;
 			}
 		}
+
+		if (previous_bsp != NONE)
+			scenario_set_active_bsp_context(previous_bsp);
 	}
 
 	return target_index;

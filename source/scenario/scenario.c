@@ -364,7 +364,7 @@ struct collision_bsp *scenario_collision_bsp_get_by_index(
 	return global_collision_bsp;
 }
 
-static boolean scenario_test_point_in_bsp(
+boolean scenario_test_point_in_bsp(
 	short bsp_index,
 	real_point3d const *point,
 	struct location *out_location)
@@ -734,15 +734,13 @@ short global_structure_bsp_index_get(
 long scenario_leaf_index_from_point(
 	const union real_point3d *point)
 {
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
 	long leaf_index = bsp3d_test_point(global_bsp3d_get(), 0, point);
 
-	/* port: fall back to other loaded BSPs if outside active BSP */
-	if (leaf_index == NONE && scenario_multi_bsp_enabled)
+	if (leaf_index != NONE &&
+		(!structure_bsp || (leaf_index & LONG_MAX) >= structure_bsp->leaves.count))
 	{
-		struct location loc;
-
-		if (scenario_find_bsp_for_point(point, &loc) != NONE)
-			leaf_index = loc.leaf_index;
+		return NONE;
 	}
 
 	return leaf_index;

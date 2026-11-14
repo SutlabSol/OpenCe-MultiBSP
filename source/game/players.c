@@ -1826,8 +1826,11 @@ static void players_compute_combined_pvs(
 			if (local_player_only && player->local_player_index == NONE)
 				continue;
 
+			cluster_index = NONE;
 			if (player->unit_index != NONE)
 			{
+				short active_bsp = scenario_get_active_bsp_index();
+
 				root_object_index =
 					object_get_ultimate_parent(player->unit_index);
 				root_object = object_get(root_object_index);
@@ -1836,15 +1839,29 @@ static void players_compute_combined_pvs(
 					player->cluster_index =
 						root_object->object.location.cluster_index;
 				}
+				if (!scenario_multi_bsp_active() ||
+					object_get_bsp_index(root_object_index) == active_bsp)
+				{
+					cluster_index = player->cluster_index;
+				}
+				else
+				{
+					struct location overlap_location;
+
+					if (scenario_test_point_in_bsp(active_bsp, &root_object->object.bounding_sphere_center, &overlap_location))
+					{
+						cluster_index = overlap_location.cluster_index;
+					}
+				}
+			}
+			else if (!scenario_multi_bsp_active())
+			{
+				cluster_index = player->cluster_index;
 			}
 
-			cluster_index = player->cluster_index;
 			if (cluster_index != NONE &&
 				cluster_index >= 0 &&
-				cluster_index < structure_bsp->clusters.count &&
-				(!scenario_multi_bsp_active() ||
-					player->unit_index == NONE ||
-					object_get_bsp_index(object_get_ultimate_parent(player->unit_index)) == scenario_get_active_bsp_index()))
+				cluster_index < structure_bsp->clusters.count)
 			{
 				bit_vector_or(
 					(short)structure_bsp->clusters.count,
@@ -1922,10 +1939,23 @@ boolean players_compute_combined_pvs_for_bsp(
 		{
 			long root_object_index = object_get_ultimate_parent(player->unit_index);
 			struct object_datum *root_object = object_get(root_object_index);
-			short cluster_index = root_object->object.location.cluster_index;
+			short cluster_index = NONE;
 
-			if (object_get_bsp_index(root_object_index) == bsp_index &&
-				cluster_index != NONE &&
+			if (object_get_bsp_index(root_object_index) == bsp_index)
+			{
+				cluster_index = root_object->object.location.cluster_index;
+			}
+			else if (scenario_multi_bsp_active())
+			{
+				struct location overlap_location;
+
+				if (scenario_test_point_in_bsp(bsp_index, &root_object->object.bounding_sphere_center, &overlap_location))
+				{
+					cluster_index = overlap_location.cluster_index;
+				}
+			}
+
+			if (cluster_index != NONE &&
 				cluster_index >= 0 &&
 				cluster_index < structure_bsp->clusters.count)
 			{
@@ -3581,6 +3611,9 @@ static boolean players_coop_bsp_switch_ready(
 	struct data_iterator iterator;
 	struct player_datum *player;
 
+	if (scenario_multi_bsp_active())
+		return TRUE;
+
 	if (since < COOP_BSP_SWITCH_SETTLE_TICKS)
 		return FALSE;
 	/* (and a dedicated server's cooldown between switches, so that no zone
@@ -3791,10 +3824,36 @@ void players_reconnect_to_structure_bsp(
 	/* port: in Multi-BSP mode, all BSPs remain resident so players stay where they are across BSP transitions */
 	if (scenario_multi_bsp_active())
 	{
+		boolean from_trigger = (players_globals->pending_teleport_starting_location_index != NONE);
+
 		players_globals->pending_teleport_starting_location_index = NONE;
 		data_iterator_new(&iterator, player_data);
 		while (player = data_iterator_next(&iterator))
+		{
 			player->cluster_index = NONE;
+			if (player->unit_index != NONE)
+			{
+				long root_object_index = object_get_ultimate_parent(player->unit_index);
+				struct object_datum *root_object = object_get(root_object_index);
+				short obj_bsp = object_get_bsp_index(root_object_index);
+
+				if (obj_bsp != global_structure_bsp_index)
+				{
+					if ((!from_trigger && !network_coop_active() &&
+							scenario_test_point_in_bsp(global_structure_bsp_index, &root_object->object.bounding_sphere_center, NULL)) ||
+						!scenario_test_point_in_bsp(obj_bsp, &root_object->object.bounding_sphere_center, NULL))
+					{
+						if (scenario_test_point_in_bsp(global_structure_bsp_index, &root_object->object.bounding_sphere_center, NULL) ||
+							scenario_test_point_in_bsp(global_structure_bsp_index, &root_object->object.position, NULL))
+						{
+							object_switch_bsp(root_object_index, global_structure_bsp_index);
+						}
+					}
+				}
+			}
+		}
+		players_compute_combined_pvs(players_globals->combined_pvs_local, TRUE);
+		players_compute_combined_pvs(players_globals->combined_pvs, FALSE);
 		return;
 	}
 
@@ -5385,10 +5444,55 @@ void players_update_after_game(
 					network_coop_tell_bsp_switch_waiting(iterator.datum_index, 0, 0,
 						(left + TICKS_PER_SECOND - 1) / TICKS_PER_SECOND);
 			}
+			/* port: in Multi-BSP mode, each player independently transitions their own unit/vehicle
+			   into the destination BSP when crossing a BSP switch trigger volume */
+			if (scenario_multi_bsp_active() &&
+				!TEST_FLAG(root_object->object.flags, _object_outside_of_map_bit))
+			{
+				scenario = global_scenario_get();
+				for (bsp_switch_trigger_volume_index = 0;
+					bsp_switch_trigger_volume_index < scenario->bsp_switch_trigger_volumes.count;
+					bsp_switch_trigger_volume_index++)
+				{
+					bsp_switch_trigger_volume = TAG_BLOCK_GET_ELEMENT(
+						&scenario->bsp_switch_trigger_volumes,
+						bsp_switch_trigger_volume_index,
+						struct scenario_bsp_switch_trigger_volume);
+					if (bsp_switch_trigger_volume->source_structure_bsp_index == player_bsp &&
+						bsp_switch_trigger_volume->destination_structure_bsp_index != player_bsp &&
+						scenario_bsp_index_is_loaded(bsp_switch_trigger_volume->destination_structure_bsp_index) &&
+						scenario_trigger_volume_test_object(
+							bsp_switch_trigger_volume->trigger_volume_index,
+							player->unit_index))
+					{
+						object_switch_bsp(
+							root_object_index,
+							bsp_switch_trigger_volume->destination_structure_bsp_index);
+						player_bsp = object_get_bsp_index(root_object_index);
+						player->cluster_index = root_object->object.location.cluster_index;
+
+						if (!(network_coop_active() && network_game_distributed_client()) &&
+							bsp_switch_trigger_volume->destination_structure_bsp_index != global_structure_bsp_index &&
+							(!network_coop_active() ||
+								players_coop_bsp_switch_allowed(player->unit_index, bsp_switch_trigger_volume_index)))
+						{
+							players_globals->bsp_check_recursive_switch_ticks = 0;
+							players_globals->local_player_triggered_switch =
+								player->local_player_index;
+							players_globals->pending_teleport_starting_location_index =
+								bsp_switch_trigger_volume_index;
+							main_switch_structure_bsp(
+								bsp_switch_trigger_volume->destination_structure_bsp_index);
+							players_coop_state.bsp_switch_time = game_time_get();
+						}
+						break;
+					}
+				}
+			}
 			/* port: a co-op client only switches BSP when the host does
 			(network_distributed.c), and the host not again until everyone
 			has the new one */
-			if (!TEST_FLAG(root_object->object.flags, _object_outside_of_map_bit) &&
+			else if (!TEST_FLAG(root_object->object.flags, _object_outside_of_map_bit) &&
 				!(network_coop_active() && (network_game_distributed_client() || !players_coop_bsp_switch_ready())))
 			{
 				scenario = global_scenario_get();
@@ -5400,11 +5504,8 @@ void players_update_after_game(
 						&scenario->bsp_switch_trigger_volumes,
 						bsp_switch_trigger_volume_index,
 						struct scenario_bsp_switch_trigger_volume);
-					if ((bsp_switch_trigger_volume->source_structure_bsp_index ==
-						global_structure_bsp_index ||
-						(scenario_multi_bsp_active() &&
-							bsp_switch_trigger_volume->source_structure_bsp_index == player_bsp &&
-							bsp_switch_trigger_volume->destination_structure_bsp_index > global_structure_bsp_index)) &&
+					if (bsp_switch_trigger_volume->source_structure_bsp_index ==
+						global_structure_bsp_index &&
 						scenario_trigger_volume_test_object(
 							bsp_switch_trigger_volume->trigger_volume_index,
 							player->unit_index) &&

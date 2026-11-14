@@ -639,6 +639,28 @@ static void handle_one_player_input(
 		struct game_globals_player_control);
 	struct input_blob input;
 	long current_weapon_index;
+	short previous_bsp = NONE;
+
+	if (scenario_multi_bsp_active())
+	{
+		long unit_index = player->unit_index;
+
+		if (unit_index == NONE)
+		{
+			long player_index = local_player_get_player_index(local_player_index);
+			if (player_index != NONE)
+				unit_index = player_get(player_index)->unit_index;
+		}
+		if (unit_index != NONE)
+		{
+			short target_bsp = object_get_bsp_index(object_get_ultimate_parent(unit_index));
+			previous_bsp = scenario_get_active_bsp_index();
+			if (target_bsp != NONE && target_bsp != previous_bsp)
+				scenario_set_active_bsp_context(target_bsp);
+			else
+				previous_bsp = NONE;
+		}
+	}
 
 	csmemset(
 		&input,
@@ -854,6 +876,9 @@ static void handle_one_player_input(
 			action.desired_facing.yaw);
 		update_client_queue(&action);
 	}
+
+	if (previous_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 
 	return;
 }

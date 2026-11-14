@@ -259,6 +259,101 @@ short object_get_bsp_index(
 	return global_structure_bsp_index_get();
 }
 
+static void object_set_bsp_index_recursive(
+	long object_index,
+	short bsp_index)
+{
+	while (object_index != NONE)
+	{
+		struct object_datum *object = object_get(object_index);
+		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+			object_bsp_index[abs_index] = bsp_index;
+		if (object->object.first_child_object_index != NONE)
+			object_set_bsp_index_recursive(object->object.first_child_object_index, bsp_index);
+		object_index = object->object.next_object_index;
+	}
+}
+
+boolean object_switch_bsp(
+	long object_index,
+	short new_bsp_index)
+{
+	long root_index;
+	short abs_index;
+	short prev_active_bsp;
+	struct object_datum *root_object;
+	boolean was_connected;
+
+	if (object_index == NONE || !scenario_bsp_index_is_loaded(new_bsp_index))
+		return FALSE;
+
+	root_index = object_get_ultimate_parent(object_index);
+	if (root_index == NONE)
+		root_index = object_index;
+	abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(root_index);
+	if (abs_index < 0 || abs_index >= MAXIMUM_OBJECTS_PER_MAP)
+		return FALSE;
+
+	root_object = object_get(root_index);
+	was_connected = TEST_FLAG(root_object->object.flags, _object_connected_to_map_bit);
+	if (was_connected)
+		object_disconnect_from_map(root_index);
+
+	object_bsp_index[abs_index] = new_bsp_index;
+	if (root_object->object.first_child_object_index != NONE)
+		object_set_bsp_index_recursive(root_object->object.first_child_object_index, new_bsp_index);
+
+	if (was_connected)
+	{
+		struct location scenario_location;
+
+		prev_active_bsp = scenario_get_active_bsp_index();
+		scenario_set_active_bsp_context(new_bsp_index);
+
+		scenario_location_from_point(&scenario_location, &root_object->object.bounding_sphere_center);
+		if (scenario_location.cluster_index == NONE)
+		{
+			struct collision_bsp_test_sphere_result result;
+
+			collision_bsp_test_sphere(
+				global_collision_bsp_get(),
+				0,
+				NULL,
+				&root_object->object.bounding_sphere_center,
+				root_object->object.bounding_sphere_radius,
+				&result);
+			if (result.leaf_count && result.leaf_indices[0] != NONE &&
+				VALID_INDEX(result.leaf_indices[0] & LONG_MAX, global_structure_bsp_get()->leaves.count))
+			{
+				scenario_location.leaf_index = result.leaf_indices[0];
+				scenario_location.cluster_index = TAG_BLOCK_GET_ELEMENT(
+					&global_structure_bsp_get()->leaves,
+					result.leaf_indices[0] & LONG_MAX,
+					struct structure_leaf)->cluster_index;
+			}
+			else
+			{
+				scenario_location_from_point(&scenario_location, &root_object->object.position);
+			}
+		}
+
+		object_reconnect_to_map(
+			root_index,
+			scenario_location.cluster_index != NONE ? &scenario_location : NULL);
+		object_bsp_index[abs_index] = new_bsp_index;
+		if (root_object->object.first_child_object_index != NONE)
+			object_set_bsp_index_recursive(root_object->object.first_child_object_index, new_bsp_index);
+		object_connect_lights(root_index, TRUE, TRUE);
+
+		if (scenario_bsp_index_is_loaded(prev_active_bsp))
+			scenario_set_active_bsp_context(prev_active_bsp);
+	}
+
+	return TRUE;
+}
+
 boolean debug_objects_names;
 boolean debug_objects_pathfinding_spheres;
 boolean debug_objects_physics;
@@ -910,12 +1005,14 @@ long find_objects_from_point_vector(
 	long *object_indices)
 {
 	long state = 0;
+	long leaf_index = scenario_leaf_index_from_point(position);
 
-	if (scenario_leaf_index_from_point(position)!=NONE)
+	if (leaf_index != NONE &&
+		VALID_INDEX(leaf_index & LONG_MAX, global_structure_bsp_get()->leaves.count))
 	{
 		short cluster_index = TAG_BLOCK_GET_ELEMENT(
 			&global_structure_bsp_get()->leaves,
-			scenario_leaf_index_from_point(position) & LONG_MAX,
+			leaf_index & LONG_MAX,
 			struct structure_leaf)->cluster_index;
 
 		if (cluster_index!=NONE)
@@ -2084,8 +2181,10 @@ void object_reconnect_to_map(
 				}
 			}
 			else if (location->cluster_index == NONE ||
+				location->leaf_index == NONE ||
 				!VALID_INDEX(location->cluster_index, global_structure_bsp_get()->clusters.count) ||
-				bsp3d_test_point(global_bsp3d_get(), 0, &object->object.bounding_sphere_center) == NONE)
+				!VALID_INDEX(location->leaf_index & LONG_MAX, global_structure_bsp_get()->leaves.count) ||
+				TAG_BLOCK_GET_ELEMENT(&global_structure_bsp_get()->leaves, location->leaf_index & LONG_MAX, struct structure_leaf)->cluster_index != location->cluster_index)
 			{
 				found_bsp = scenario_find_bsp_for_point(&object->object.bounding_sphere_center, &bounding_sphere_location);
 				if (found_bsp == NONE)
@@ -2100,7 +2199,11 @@ void object_reconnect_to_map(
 		}
 
 		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+		{
 			object_bsp_index[abs_index] = obj_bsp;
+			if (object->object.first_child_object_index != NONE)
+				object_set_bsp_index_recursive(object->object.first_child_object_index, obj_bsp);
+		}
 
 		if (!location)
 		{

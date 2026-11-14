@@ -168,6 +168,10 @@ struct structure_bsp *scenario_structure_bsp_get_by_index(
 	short bsp_index);
 struct collision_bsp *scenario_collision_bsp_get_by_index(
 	short bsp_index);
+boolean scenario_test_point_in_bsp(
+	short bsp_index,
+	real_point3d const *point,
+	struct location *out_location);
 short scenario_find_bsp_for_point(
 	real_point3d const *point,
 	struct location *out_location);
