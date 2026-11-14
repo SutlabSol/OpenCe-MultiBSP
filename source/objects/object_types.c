@@ -1098,6 +1098,11 @@ static void object_types_place_objects_for_bsp(
 							scenario_datum_index,
 							element_size);
 
+					if (processed_bsp_flags == 0)
+					{
+						scenario_object->on_bsp_flags = 0;
+					}
+
 					/* port: a palette entry the scenario has, naming a tag (a
 					map's index; object_new_from_scenario makes nothing from
 					any other) */
@@ -1159,7 +1164,8 @@ static void object_types_place_objects_for_bsp(
 					if ((scenario_object->name_index==NONE ||
 						object_index_from_name_index(scenario_object->name_index)==NONE) &&
 						!TEST_FLAG(scenario_object->placement_flags, _scenario_object_placement_not_automatic_bit) &&
-						TEST_FLAG(scenario_object->on_bsp_flags, bsp_index))
+						TEST_FLAG(scenario_object->on_bsp_flags, bsp_index) &&
+						(!scenario_multi_bsp_active() || (scenario_object->on_bsp_flags & processed_bsp_flags) == 0))
 					{
 						object_new_from_scenario(scenario_object, scenario_palette);
 						objects_garbage_collection();

@@ -1832,19 +1832,15 @@ void tag_relocate_structure_bsp(
 		relocate_schema_fields((byte *)bsp, group->definition, old_start, old_end, delta, 0);
 		relocate_pointer(&bsp->markers.address, old_start, old_end, delta);
 
-		for (l = 0; l < bsp->lightmaps.count; l++)
+		for (l = 0; l < bsp->lightmaps.count && bsp->lightmaps.address; l++)
 		{
-			struct structure_lightmap *lightmap = TAG_BLOCK_GET_ELEMENT(
-				&bsp->lightmaps,
-				l,
-				struct structure_lightmap);
+			struct structure_lightmap *lightmap =
+				&((struct structure_lightmap *)bsp->lightmaps.address)[l];
 
-			for (m = 0; m < lightmap->materials.count; m++)
+			for (m = 0; m < lightmap->materials.count && lightmap->materials.address; m++)
 			{
-				struct structure_material *material = TAG_BLOCK_GET_ELEMENT(
-					&lightmap->materials,
-					m,
-					struct structure_material);
+				struct structure_material *material =
+					&((struct structure_material *)lightmap->materials.address)[m];
 
 				relocate_pointer(&material->vertices.hardware_format, old_start, old_end, delta);
 				relocate_pointer(&material->lightmap_vertices.hardware_format, old_start, old_end, delta);

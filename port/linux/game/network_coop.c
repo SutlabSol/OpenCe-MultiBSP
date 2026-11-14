@@ -175,7 +175,7 @@ enum
 
 	/* the size of devices.c's device group array (devices_initialize's;
 	every index into the arrays below is checked against this too) */
-	MAXIMUM_DEVICE_GROUPS = 1024,
+	MAXIMUM_DEVICE_GROUPS = HALO_PORT_MAXIMUM_DEVICE_GROUPS,
 	/* a changed group is sent in this many ticks' messages */
 	DEVICE_GROUP_SENDS = 3,
 	/* unchanged groups sent each tick, in rotation */
@@ -202,7 +202,7 @@ enum
 };
 
 /* (devices.c's literal count: a change there is one here) */
-typedef char device_groups_count_assert[MAXIMUM_DEVICE_GROUPS == 1024 ? 1 : -1];
+typedef char device_groups_count_assert[MAXIMUM_DEVICE_GROUPS == HALO_PORT_MAXIMUM_DEVICE_GROUPS ? 1 : -1];
 
 /* distributed_coop_event.kind */
 enum

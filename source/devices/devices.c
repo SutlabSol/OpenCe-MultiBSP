@@ -211,7 +211,7 @@ void devices_initialize(
 {
 	device_groups_data = game_state_data_new(
 		"device groups",
-		1024,
+		HALO_PORT_MAXIMUM_DEVICE_GROUPS,
 		sizeof(struct device_group_datum));
 	match_assert(
 		"c:\\halo\\SOURCE\\devices\\devices.c",

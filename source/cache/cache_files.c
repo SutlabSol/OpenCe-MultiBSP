@@ -1584,33 +1584,31 @@ boolean scenario_structure_bsp_load(
 		}
 		if (resident_slot != NONE)
 		{
-			resident_alloc = XPhysicalAlloc(
-				(unsigned long)reference->file_size,
-				(unsigned long)-1,
-				0,
-				PAGE_READWRITE);
-			if (resident_alloc)
+			resident_alloc = system_malloc((size_t)reference->file_size);
+			contiguous = FALSE;
+			if (!resident_alloc)
 			{
-				contiguous = TRUE;
-			}
-			else
-			{
-				resident_alloc = system_malloc((size_t)reference->file_size);
-				contiguous = FALSE;
+				resident_alloc = XPhysicalAlloc(
+					(unsigned long)reference->file_size,
+					(unsigned long)-1,
+					0,
+					PAGE_READWRITE);
+				if (resident_alloc)
+					contiguous = TRUE;
 			}
 		}
 		if (resident_alloc)
 		{
 			csmemcpy(resident_alloc, mcc_header, (size_t)reference->file_size);
-			tag_relocate_structure_bsp(mcc_header, reference->file_size, resident_alloc);
-			mcc_cache_bsp_relocate(mcc_header, reference->file_size, resident_alloc);
-			mcc_header = resident_alloc;
-			mcc_structure = ((struct cache_file_structure_bsp_header *)resident_alloc)->base_address;
 			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
 			resident_bsps[resident_slot].allocation = resident_alloc;
 			resident_bsps[resident_slot].size = reference->file_size;
 			resident_bsps[resident_slot].header = (struct cache_file_structure_bsp_header *)resident_alloc;
 			resident_bsps[resident_slot].contiguous = contiguous;
+			tag_relocate_structure_bsp(mcc_header, reference->file_size, resident_alloc);
+			mcc_cache_bsp_relocate(mcc_header, reference->file_size, resident_alloc);
+			mcc_header = resident_alloc;
+			mcc_structure = ((struct cache_file_structure_bsp_header *)resident_alloc)->base_address;
 		}
 
 		cache_file_globals.structure_bsp_header = mcc_header;
@@ -1737,13 +1735,13 @@ boolean scenario_structure_bsp_load(
 		if (resident_alloc)
 		{
 			csmemcpy(resident_alloc, reference->base_address, (size_t)reference->file_size);
-			tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
 			structure_bsp_header = (struct cache_file_structure_bsp_header *)resident_alloc;
 			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
 			resident_bsps[resident_slot].allocation = resident_alloc;
 			resident_bsps[resident_slot].size = reference->file_size;
 			resident_bsps[resident_slot].header = structure_bsp_header;
 			resident_bsps[resident_slot].contiguous = TRUE;
+			tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
 		}
 	}
 

@@ -522,9 +522,9 @@ void scenario_unload(
 		!bink_playback_active());
 
 	/* port: release pointers into the bsp before its tags go away */
+	scenario_multi_bsp_enabled = FALSE;
 	structure_culling_dispose();
 	scenario_tags_unload();
-	scenario_multi_bsp_enabled = FALSE;
 	active_structure_bsp_index = NONE;
 	csmemset(scenario_loaded_structure_bsps, 0, sizeof(scenario_loaded_structure_bsps));
 	csmemset(scenario_loaded_collision_bsps, 0, sizeof(scenario_loaded_collision_bsps));
@@ -1489,6 +1489,7 @@ boolean scenario_load(
 						MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
 					short loaded_count = 1;
 
+					scenario_multi_bsp_enabled = TRUE;
 					for (bsp_index = 1; bsp_index < bsp_count; bsp_index++)
 					{
 						struct scenario_structure_bsp_reference *ref = TAG_BLOCK_GET_ELEMENT(
@@ -1529,8 +1530,7 @@ boolean scenario_load(
 					global_structure_bsp = scenario_loaded_structure_bsps[0];
 					global_collision_bsp = scenario_loaded_collision_bsps[0];
 					global_bsp3d = scenario_loaded_bsp3ds[0];
-					if (loaded_count > 1)
-						scenario_multi_bsp_enabled = TRUE;
+					scenario_multi_bsp_enabled = (loaded_count > 1);
 				}
 			}
 		}

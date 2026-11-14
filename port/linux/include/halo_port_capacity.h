@@ -103,6 +103,7 @@ players, more each), have room for several times a level's own. */
 /* ---------- objects */
 
 #define HALO_PORT_MAXIMUM_OBJECTS_PER_MAP 8192 /* (2048) */
+#define HALO_PORT_MAXIMUM_DEVICE_GROUPS 4096 /* (1024) */
 #define HALO_PORT_OBJECT_MEMORY_POOL_SIZE 0x800000 /* (0x100000) */
 /* each of the two reference lists of every cluster partition (collideable
 objects, noncollideable objects, lights) */
