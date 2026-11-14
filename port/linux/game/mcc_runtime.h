@@ -38,6 +38,8 @@ void mcc_geometry_dispose(struct mcc_runtime *runtime);
 int mcc_geometry_bsp_load(struct mcc_runtime *runtime, uint32_t handle,
     uint32_t offset, uint32_t size, void *address, void **structure);
 void mcc_geometry_bsp_unload(struct mcc_runtime *runtime);
+void mcc_geometry_bsp_relocate(struct mcc_runtime *runtime, void const *old_base,
+    uint32_t size, void *new_base);
 /* Exact MCC-owned hardware/payload identities, used by its tag validator. */
 void *mcc_geometry_buffer_data(struct mcc_runtime *runtime, void const *hardware,
     int index_buffer, unsigned long *bytes);

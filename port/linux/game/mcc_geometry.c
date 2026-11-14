@@ -441,17 +441,35 @@ static int mg_material_run_compare(void const *a,void const *b) {
     return x<y ? -1 : x>y;
 }
 
+static void mg_release(struct mcc_geometry_buffer *b) {
+    if (b->is_index) rasterizer_triangle_buffer_delete((struct triangle_buffer *)b->descriptor);
+    else rasterizer_vertex_buffer_delete((struct vertex_buffer *)b->descriptor);
+    if (b->allocation) free(b->allocation);
+    free(b);
+}
+
+static void mg_rollback_bsp_buffers(struct mcc_runtime *r, struct mcc_geometry_buffer *saved_head) {
+    struct mcc_geometry_state *state=r ? r->geometry : NULL;
+    if (!state) return;
+    while (state->buffers && state->buffers != saved_head) {
+        struct mcc_geometry_buffer *b=state->buffers;
+        state->buffers=b->next;
+        mg_release(b);
+    }
+}
+
 int mcc_geometry_bsp_load(struct mcc_runtime *r,uint32_t handle,uint32_t offset,
     uint32_t size,void *address,void **result) {
     struct mcc_cache_bsp const *b=NULL;
     struct structure_bsp *structure;
     struct structure_lightmap *lightmaps;
     struct mg_material_run *runs=NULL;
+    struct mcc_geometry_buffer *saved_buffers;
     uint32_t i,run_count=0;
     long l;
     if (!r || !r->geometry || !result) return 0;
     *result=NULL;
-    mcc_geometry_bsp_unload(r);
+    saved_buffers=((struct mcc_geometry_state *)r->geometry)->buffers;
     for (i=0;i<r->report.bsp_count;i++) {
         struct mcc_cache_bsp const *candidate=&r->report.bsps[i];
         if (candidate->tag_handle==handle && candidate->file_offset==offset && candidate->size==size &&
@@ -492,15 +510,22 @@ int mcc_geometry_bsp_load(struct mcc_runtime *r,uint32_t handle,uint32_t offset,
     return 1;
 fail:
     if (runs) free(runs);
-    mcc_geometry_bsp_unload(r);
+    mg_rollback_bsp_buffers(r, saved_buffers);
     return mg_error("BSP material conversion failed");
 }
 
-static void mg_release(struct mcc_geometry_buffer *b) {
-    if (b->is_index) rasterizer_triangle_buffer_delete((struct triangle_buffer *)b->descriptor);
-    else rasterizer_vertex_buffer_delete((struct vertex_buffer *)b->descriptor);
-    if (b->allocation) free(b->allocation);
-    free(b);
+void mcc_geometry_bsp_relocate(struct mcc_runtime *r, void const *old_base,
+    uint32_t size, void *new_base) {
+    struct mcc_geometry_state *state=r ? r->geometry : NULL;
+    struct mcc_geometry_buffer *b;
+    uintptr_t start=(uintptr_t)old_base;
+    ptrdiff_t delta=(uintptr_t)new_base - start;
+    if (!state || !old_base || !new_base || !size || !delta) return;
+    for (b=state->buffers;b;b=b->next) {
+        uintptr_t desc=(uintptr_t)b->descriptor;
+        if (b->is_bsp && desc>=start && desc<start+size)
+            b->descriptor=(unsigned char *)b->descriptor+delta;
+    }
 }
 
 void mcc_geometry_bsp_unload(struct mcc_runtime *r) {

@@ -74,13 +74,15 @@ void mcc_object_names_receive(void const *entries, short count, long host_time)
         chunk.first % MCC_NAME_CHUNK || chunk.count != MIN(MCC_NAME_CHUNK, total - chunk.first)) return;
     for (i = chunk.count; i < MCC_NAME_CHUNK; ++i)
         if (chunk.present[i / 8] & (1u << (i % 8))) return;
-    if (chunk.bsp != global_structure_bsp_index_get()) {
-        mcc_object_names_network_reset();
-        return;
-    }
-    if (received_bsp != chunk.bsp) {
-        mcc_object_names_network_reset();
-        received_bsp = chunk.bsp;
+    if (!scenario_multi_bsp_active()) {
+        if (chunk.bsp != global_structure_bsp_index_get()) {
+            mcc_object_names_network_reset();
+            return;
+        }
+        if (received_bsp != chunk.bsp) {
+            mcc_object_names_network_reset();
+            received_bsp = chunk.bsp;
+        }
     }
     slot = chunk.first / MCC_NAME_CHUNK;
     if (host_time <= received[slot]) return;

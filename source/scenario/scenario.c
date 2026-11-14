@@ -1322,6 +1322,13 @@ boolean scenario_switch_structure_bsp(
 				&global_scenario->structure_bsp_references,
 				global_structure_bsp_index,
 				struct scenario_structure_bsp_reference));
+			if (old_structure_bsp_index >= 0 &&
+				old_structure_bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+			{
+				scenario_loaded_structure_bsps[old_structure_bsp_index] = NULL;
+				scenario_loaded_collision_bsps[old_structure_bsp_index] = NULL;
+				scenario_loaded_bsp3ds[old_structure_bsp_index] = NULL;
+			}
 			scenario_globals->structure_bsp_index = NONE;
 			global_structure_bsp_index = NONE;
 		}
@@ -1474,8 +1481,7 @@ boolean scenario_load(
 				result = TRUE;
 				/* port: preload all remaining structure BSPs in the scenario so all BSPs
 				stay resident simultaneously for co-op and campaign play */
-				if (!mcc_cache_tags_loaded() &&
-					global_scenario->structure_bsp_references.count > 1)
+				if (global_scenario->structure_bsp_references.count > 1)
 				{
 					short bsp_index;
 					short bsp_count = (short)MIN(

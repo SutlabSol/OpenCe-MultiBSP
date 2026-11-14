@@ -281,6 +281,7 @@ struct resident_bsp_entry
 	void *allocation;
 	long size;
 	struct cache_file_structure_bsp_header *header;
+	boolean contiguous;
 };
 
 static struct resident_bsp_entry resident_bsps[32];
@@ -411,8 +412,8 @@ boolean cache_file_tag_cache_contains(
 	unsigned long tag_cache_size = TAG_CACHE_SIZE;
 
 	/* port: an MCC map's tags are in a window of their own (mcc_cache.c) */
-	if (mcc_cache_tags_loaded())
-		return mcc_cache_contains(address, size);
+	if (mcc_cache_tags_loaded() && mcc_cache_contains(address, size))
+		return TRUE;
 
 	if (custom_edition_cache_tags_loaded())
 	{
@@ -686,7 +687,11 @@ void scenario_tags_unload(
 	/* port: release any resident multi-BSP allocations before unloading tags */
 	{
 		long i;
-		boolean had_resident_ce_bsp = FALSE;
+
+		if (custom_edition_cache_tags_loaded())
+			custom_edition_structure_bsp_unload();
+		if (mcc_cache_tags_loaded())
+			mcc_cache_bsp_unload();
 
 		for (i = 0; i < NUMBEROF(resident_bsps); i++)
 		{
@@ -702,19 +707,19 @@ void scenario_tags_unload(
 					xgpu_static_range_remove(resident_bsps[i].allocation, 1);
 				}
 #endif
-				if (resident_bsps[i].header)
+				if (resident_bsps[i].header && !mcc_cache_tags_loaded())
 					structure_bsp_header_deregister_vertex_buffers(resident_bsps[i].header);
-				if (custom_edition_cache_tags_loaded())
-					had_resident_ce_bsp = TRUE;
-				XPhysicalFree(resident_bsps[i].allocation);
+				if (resident_bsps[i].contiguous)
+					XPhysicalFree(resident_bsps[i].allocation);
+				else
+					system_free(resident_bsps[i].allocation);
 				resident_bsps[i].allocation = NULL;
 				resident_bsps[i].header = NULL;
 				resident_bsps[i].tag_index = NONE;
 				resident_bsps[i].size = 0;
+				resident_bsps[i].contiguous = FALSE;
 			}
 		}
-		if (had_resident_ce_bsp)
-			custom_edition_structure_bsp_unload();
 		cache_file_globals.structure_bsp_header = NULL;
 	}
 	/* port: an MCC map's tags and buffers are its own (mcc_cache.c) */
@@ -1561,9 +1566,53 @@ boolean scenario_structure_bsp_load(
 	if (mcc_cache_tags_loaded())
 	{
 		void *mcc_header, *mcc_structure;
+		long i;
+		void *resident_alloc = NULL;
+		boolean contiguous = FALSE;
+
 		if (!cache_file_structure_bsp_tag_valid(reference) ||
 			!mcc_cache_bsp_load(reference, &mcc_header, &mcc_structure))
 			return FALSE;
+
+		for (i = 0; i < NUMBEROF(resident_bsps); i++)
+		{
+			if (!resident_bsps[i].allocation)
+			{
+				resident_slot = i;
+				break;
+			}
+		}
+		if (resident_slot != NONE)
+		{
+			resident_alloc = XPhysicalAlloc(
+				(unsigned long)reference->file_size,
+				(unsigned long)-1,
+				0,
+				PAGE_READWRITE);
+			if (resident_alloc)
+			{
+				contiguous = TRUE;
+			}
+			else
+			{
+				resident_alloc = system_malloc((size_t)reference->file_size);
+				contiguous = FALSE;
+			}
+		}
+		if (resident_alloc)
+		{
+			csmemcpy(resident_alloc, mcc_header, (size_t)reference->file_size);
+			tag_relocate_structure_bsp(mcc_header, reference->file_size, resident_alloc);
+			mcc_cache_bsp_relocate(mcc_header, reference->file_size, resident_alloc);
+			mcc_header = resident_alloc;
+			mcc_structure = ((struct cache_file_structure_bsp_header *)resident_alloc)->base_address;
+			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
+			resident_bsps[resident_slot].allocation = resident_alloc;
+			resident_bsps[resident_slot].size = reference->file_size;
+			resident_bsps[resident_slot].header = (struct cache_file_structure_bsp_header *)resident_alloc;
+			resident_bsps[resident_slot].contiguous = contiguous;
+		}
+
 		cache_file_globals.structure_bsp_header = mcc_header;
 		cache_get_tag_instance(reference->structure_bsp.index)->base_address = mcc_structure;
 		return TRUE;
@@ -1694,6 +1743,7 @@ boolean scenario_structure_bsp_load(
 			resident_bsps[resident_slot].allocation = resident_alloc;
 			resident_bsps[resident_slot].size = reference->file_size;
 			resident_bsps[resident_slot].header = structure_bsp_header;
+			resident_bsps[resident_slot].contiguous = TRUE;
 		}
 	}
 
@@ -1704,11 +1754,15 @@ boolean scenario_structure_bsp_load(
 	{
 		if (resident_slot != NONE && resident_bsps[resident_slot].allocation)
 		{
-			XPhysicalFree(resident_bsps[resident_slot].allocation);
+			if (resident_bsps[resident_slot].contiguous)
+				XPhysicalFree(resident_bsps[resident_slot].allocation);
+			else
+				system_free(resident_bsps[resident_slot].allocation);
 			resident_bsps[resident_slot].allocation = NULL;
 			resident_bsps[resident_slot].header = NULL;
 			resident_bsps[resident_slot].tag_index = NONE;
 			resident_bsps[resident_slot].size = 0;
+			resident_bsps[resident_slot].contiguous = FALSE;
 		}
 		return FALSE;
 	}

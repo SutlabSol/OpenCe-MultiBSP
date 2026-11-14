@@ -25,6 +25,7 @@ boolean mcc_cache_read(long tag, long offset, long bytes, void *out);
 boolean mcc_cache_bsp_load(struct scenario_structure_bsp_reference const *reference,
     void **header, void **structure);
 void mcc_cache_bsp_unload(void);
+void mcc_cache_bsp_relocate(void const *old_base, long size, void *new_base);
 short mcc_cache_part_palette(void const *buffer, byte const **nodes);
 boolean mcc_cache_bitmap_valid(struct bitmap_data *bitmap);
 void const *mcc_cache_bitmap_pixels(struct bitmap_data const *bitmap, unsigned long *bytes, int *coverage);

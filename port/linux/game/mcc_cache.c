@@ -463,6 +463,12 @@ boolean mcc_cache_bsp_load(struct scenario_structure_bsp_reference const *refere
 
 void mcc_cache_bsp_unload(void) { mcc_geometry_bsp_unload(&mcc_loaded_cache); }
 
+void mcc_cache_bsp_relocate(void const *old_base, long size, void *new_base)
+{
+    if (mcc_loaded && size > 0)
+        mcc_geometry_bsp_relocate(&mcc_loaded_cache, old_base, (uint32_t)size, new_base);
+}
+
 short mcc_cache_part_palette(void const *buffer, byte const **nodes)
 {
     return mcc_loaded ? mcc_geometry_part_palette(&mcc_loaded_cache, buffer, nodes) : 0;
