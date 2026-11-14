@@ -1839,7 +1839,12 @@ static void players_compute_combined_pvs(
 			}
 
 			cluster_index = player->cluster_index;
-			if (cluster_index != NONE)
+			if (cluster_index != NONE &&
+				cluster_index >= 0 &&
+				cluster_index < structure_bsp->clusters.count &&
+				(!scenario_multi_bsp_active() ||
+					player->unit_index == NONE ||
+					object_get_bsp_index(object_get_ultimate_parent(player->unit_index)) == scenario_get_active_bsp_index()))
 			{
 				bit_vector_or(
 					(short)structure_bsp->clusters.count,
@@ -1851,7 +1856,9 @@ static void players_compute_combined_pvs(
 			}
 		}
 
-		if (activating_cluster_index != NONE)
+		if (activating_cluster_index != NONE &&
+			activating_cluster_index >= 0 &&
+			activating_cluster_index < structure_bsp->clusters.count)
 		{
 			bit_vector_or(
 				(short)structure_bsp->clusters.count,
@@ -1874,7 +1881,9 @@ static void players_compute_combined_pvs(
 					&observer_get_camera(0)->position) & LONG_MAX,
 				struct structure_leaf);
 			cluster_index = leaf->cluster_index;
-			if (cluster_index != NONE)
+			if (cluster_index != NONE &&
+				cluster_index >= 0 &&
+				cluster_index < structure_bsp->clusters.count)
 			{
 				bit_vector_or(
 					(short)structure_bsp->clusters.count,
@@ -1888,6 +1897,51 @@ static void players_compute_combined_pvs(
 	}
 
 	return;
+}
+
+/* port: compute combined PVS for players currently located in a specific loaded structure BSP */
+boolean players_compute_combined_pvs_for_bsp(
+	short bsp_index,
+	unsigned long *combined_pvs)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	struct structure_bsp *structure_bsp = scenario_structure_bsp_get_by_index(bsp_index);
+	boolean any_player = FALSE;
+
+	csmemset(combined_pvs, 0, 0x40);
+	if (!structure_bsp)
+	{
+		return FALSE;
+	}
+
+	data_iterator_new(&iterator, player_data);
+	while ((player = data_iterator_next(&iterator)) != NULL)
+	{
+		if (player->unit_index != NONE)
+		{
+			long root_object_index = object_get_ultimate_parent(player->unit_index);
+			struct object_datum *root_object = object_get(root_object_index);
+			short cluster_index = root_object->object.location.cluster_index;
+
+			if (object_get_bsp_index(root_object_index) == bsp_index &&
+				cluster_index != NONE &&
+				cluster_index >= 0 &&
+				cluster_index < structure_bsp->clusters.count)
+			{
+				bit_vector_or(
+					(short)structure_bsp->clusters.count,
+					combined_pvs,
+					structure_bsp_get_cluster_pvs(
+						structure_bsp,
+						cluster_index),
+					combined_pvs);
+				any_player = TRUE;
+			}
+		}
+	}
+
+	return any_player;
 }
 
 static boolean player_handle_action(
@@ -2032,121 +2086,152 @@ static boolean player_teleport_internal(
 		"c:\\halo\\SOURCE\\game\\players.c",
 		0x4FB,
 		source_unit_index==NONE || local_player_count()>1 || game_connection()!=_game_connection_local);
-	if (source_unit_index != NONE &&
-		object_get_ultimate_parent(source_unit_index) != source_unit_index)
+	/* port: in Multi-BSP mode, bind the target BSP context during teleport collision checks */
 	{
-		long source_root_object_index = object_get_ultimate_parent(source_unit_index);
-		struct object_datum *source_root_object;
-		real_vector3d best_adjustment_vector;
-		real collision_radius;
-		real_matrix4x3 adjustment_matrix;
-		real scale;
-		short adjustment_index;
-		real_point3d anchor_point;
+		short previous_bsp = scenario_get_active_bsp_index();
+		short target_bsp = NONE;
 
-		unit_get(source_unit_index);
-		source_root_object = object_get(source_root_object_index);
-		best_adjustment_vector = source_root_object->object.translational_velocity;
-		best_adjustment_vector.k = 0.f;
-		source_unit_index = source_root_object_index;
-		if (!(magnitude_squared3d(&best_adjustment_vector) > 0.f))
+		if (scenario_multi_bsp_active())
 		{
-			if (source_root_object->object.forward.k < 0.70710677f)
+			if (source_unit_index != NONE && object_try_and_get(source_unit_index))
 			{
-				best_adjustment_vector = source_root_object->object.forward;
+				target_bsp = object_get_bsp_index(object_get_ultimate_parent(source_unit_index));
+			}
+			if (target_bsp == NONE && position)
+			{
+				target_bsp = scenario_find_bsp_for_point(position, NULL);
+			}
+			if (target_bsp != NONE && scenario_bsp_index_is_loaded(target_bsp))
+			{
+				scenario_set_active_bsp_context(target_bsp);
 			}
 			else
 			{
-				best_adjustment_vector = source_root_object->object.up;
+				target_bsp = NONE;
 			}
 		}
-		best_adjustment_vector.k = 0.f;
 
-		collision_radius = biped_definition_get(biped->definition_index)->biped.collision_radius;
-		scale = collision_radius * 3.f + source_root_object->object.bounding_sphere_radius;
-		match_assert(
-			"c:\\halo\\SOURCE\\game\\players.c",
-			0x525,
-			magnitude3d(&best_adjustment_vector));
-		match_assert(
-			"c:\\halo\\SOURCE\\game\\players.c",
-			0x526,
-			scale);
-
-		negate_vector3d(
-			&best_adjustment_vector,
-			&best_adjustment_vector);
-		normalize3d(&best_adjustment_vector);
-		matrix4x3_from_point_and_vectors(
-			&adjustment_matrix,
-			&source_root_object->object.bounding_sphere_center,
-			&best_adjustment_vector,
-			global_up3d);
-		adjustment_matrix.scale = scale;
-
-		for (adjustment_index = 0;
-			adjustment_index < NUMBEROF(adjustment_weights) && !result;
-			adjustment_index++)
+		if (source_unit_index != NONE &&
+			object_get_ultimate_parent(source_unit_index) != source_unit_index)
 		{
-			matrix4x3_transform_point(
+			long source_root_object_index = object_get_ultimate_parent(source_unit_index);
+			struct object_datum *source_root_object;
+			real_vector3d best_adjustment_vector;
+			real collision_radius;
+			real_matrix4x3 adjustment_matrix;
+			real scale;
+			short adjustment_index;
+			real_point3d anchor_point;
+
+			unit_get(source_unit_index);
+			source_root_object = object_get(source_root_object_index);
+			best_adjustment_vector = source_root_object->object.translational_velocity;
+			best_adjustment_vector.k = 0.f;
+			source_unit_index = source_root_object_index;
+			if (!(magnitude_squared3d(&best_adjustment_vector) > 0.f))
+			{
+				if (source_root_object->object.forward.k < 0.70710677f)
+				{
+					best_adjustment_vector = source_root_object->object.forward;
+				}
+				else
+				{
+					best_adjustment_vector = source_root_object->object.up;
+				}
+			}
+			best_adjustment_vector.k = 0.f;
+
+			collision_radius = biped_definition_get(biped->definition_index)->biped.collision_radius;
+			scale = collision_radius * 3.f + source_root_object->object.bounding_sphere_radius;
+			match_assert(
+				"c:\\halo\\SOURCE\\game\\players.c",
+				0x525,
+				magnitude3d(&best_adjustment_vector));
+			match_assert(
+				"c:\\halo\\SOURCE\\game\\players.c",
+				0x526,
+				scale);
+
+			negate_vector3d(
+				&best_adjustment_vector,
+				&best_adjustment_vector);
+			normalize3d(&best_adjustment_vector);
+			matrix4x3_from_point_and_vectors(
 				&adjustment_matrix,
-				&adjustment_weights[adjustment_index],
-				&anchor_point);
+				&source_root_object->object.bounding_sphere_center,
+				&best_adjustment_vector,
+				global_up3d);
+			adjustment_matrix.scale = scale;
+
+			for (adjustment_index = 0;
+				adjustment_index < NUMBEROF(adjustment_weights) && !result;
+				adjustment_index++)
+			{
+				matrix4x3_transform_point(
+					&adjustment_matrix,
+					&adjustment_weights[adjustment_index],
+					&anchor_point);
+				result = biped_fix_position(
+					player_unit_index,
+					source_unit_index,
+					&anchor_point,
+					NULL,
+					2.f,
+					FALSE,
+					FALSE,
+					TRUE);
+
+				if (!result)
+				{
+					short random_adjustment_index;
+					real_point3d new_position;
+					real_vector3d random_offset;
+
+					for (random_adjustment_index = 0;
+						random_adjustment_index < 8 && !result;
+						random_adjustment_index++)
+					{
+						random_offset = *global_zero_vector3d;
+						random_direction3d(&random_offset);
+						point_from_line3d(
+							&anchor_point,
+							&random_offset,
+							collision_radius,
+							&new_position);
+						result = biped_fix_position(
+							player_unit_index,
+							source_unit_index,
+							&new_position,
+							NULL,
+							2.f,
+							FALSE,
+							FALSE,
+							TRUE);
+					}
+				}
+			}
+		}
+		else
+		{
 			result = biped_fix_position(
 				player_unit_index,
 				source_unit_index,
-				&anchor_point,
+				(real_point3d *)position,
 				NULL,
 				2.f,
 				FALSE,
 				FALSE,
 				TRUE);
-
-			if (!result)
-			{
-				short random_adjustment_index;
-				real_point3d new_position;
-				real_vector3d random_offset;
-
-				for (random_adjustment_index = 0;
-					random_adjustment_index < 8 && !result;
-					random_adjustment_index++)
-				{
-					random_offset = *global_zero_vector3d;
-					random_direction3d(&random_offset);
-					point_from_line3d(
-						&anchor_point,
-						&random_offset,
-						collision_radius,
-						&new_position);
-					result = biped_fix_position(
-						player_unit_index,
-						source_unit_index,
-						&new_position,
-						NULL,
-						2.f,
-						FALSE,
-						FALSE,
-						TRUE);
-				}
-			}
 		}
-	}
-	else
-	{
-		result = biped_fix_position(
-			player_unit_index,
-			source_unit_index,
-			(real_point3d *)position,
-			NULL,
-			2.f,
-			FALSE,
-			FALSE,
-			TRUE);
+
+		if (target_bsp != NONE)
+		{
+			scenario_set_active_bsp_context(previous_bsp);
+		}
 	}
 
 	player->cluster_index = NONE;
-	if (result)
+	if (result && !scenario_multi_bsp_active())
 	{
 		struct scenario *scenario = global_scenario_get();
 		short bsp_switch_trigger_volume_index;
@@ -2914,7 +2999,9 @@ static struct player_starting_location const *players_coop_spawn_location(
 		point_from_line3d(&beside->object.position, &beside->object.forward,
 			beside->object.bounding_sphere_radius + COOP_SPAWN_BEHIND_DISTANCE, &location->position);
 	}
-	if (scenario_leaf_index_from_point(&location->position) == NONE ||
+	if ((scenario_multi_bsp_active() ?
+			(scenario_find_bsp_for_point(&location->position, NULL) == NONE) :
+			(scenario_leaf_index_from_point(&location->position) == NONE)) ||
 		player_position_switches_bsp(&location->position))
 	{
 		location->position = beside->object.position;
@@ -3536,6 +3623,21 @@ static boolean players_coop_bsp_switch_allowed(
 {
 	long player_index = unit_get(unit_index)->unit.player_index;
 
+	/* port: in Multi-BSP mode, all BSPs are resident and players are not force-teleported;
+	   allow any player advancing forward (or the host) to advance global_structure_bsp_index */
+	if (scenario_multi_bsp_active())
+	{
+		struct scenario_bsp_switch_trigger_volume *volume = TAG_BLOCK_GET_ELEMENT(
+			&global_scenario_get()->bsp_switch_trigger_volumes,
+			bsp_switch_trigger_volume_index,
+			struct scenario_bsp_switch_trigger_volume);
+		if (volume->destination_structure_bsp_index > global_structure_bsp_index)
+		{
+			return TRUE;
+		}
+		return player_get(player_index)->local_player_index != NONE || !players_coop_host_alive();
+	}
+
 	if (!network_coop_player_has_structure_bsp(player_index))
 		return FALSE;
 	/* port: a dedicated server has no player of its own: its zones switch the
@@ -3554,6 +3656,9 @@ static void players_coop_show_host_wait(
 	void)
 {
 	short local_player_index;
+
+	if (scenario_multi_bsp_active())
+		return;
 
 	for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
 	{
@@ -3584,6 +3689,12 @@ static void player_teleport_on_bsp_switch(
 	long unit_index;
 	boolean outside_switch_trigger;
 	boolean teleport_succeeded;
+
+	/* port: in Multi-BSP mode, all BSPs remain loaded so players are never force-teleported on BSP switches */
+	if (scenario_multi_bsp_active())
+	{
+		return;
+	}
 
 	player = player_get(player_index);
 	unit_index = player->unit_index;
@@ -3670,6 +3781,16 @@ void players_reconnect_to_structure_bsp(
 	short cutscene_flag_index;
 	long player_unit_index;
 	short pass;
+
+	/* port: in Multi-BSP mode, all BSPs remain resident so players stay where they are across BSP transitions */
+	if (scenario_multi_bsp_active())
+	{
+		players_globals->pending_teleport_starting_location_index = NONE;
+		data_iterator_new(&iterator, player_data);
+		while (player = data_iterator_next(&iterator))
+			player->cluster_index = NONE;
+		return;
+	}
 
 	/* port: also on a network co-op host, whose other players are remote */
 	if (players_globals->pending_teleport_starting_location_index != NONE &&

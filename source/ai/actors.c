@@ -679,7 +679,9 @@ real_argb_color const *actor_activation_debug_color(
 			struct encounter_definition);
 
 		if (encounter_definition->runtime_structure_bsp_reference_index != NONE &&
-			encounter_definition->runtime_structure_bsp_reference_index != global_structure_bsp_index)
+			encounter_definition->runtime_structure_bsp_reference_index != global_structure_bsp_index &&
+			/* port: allow any loaded BSP in Multi-BSP mode */
+			!(scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(encounter_definition->runtime_structure_bsp_reference_index)))
 		{
 			return global_real_argb_red;
 		}
@@ -4075,7 +4077,10 @@ void actors_handle_unit_effect(
 	structure_bsp = global_structure_bsp_get();
 	csmemset(audible_clusters, 0, BIT_VECTOR_SIZE_IN_BYTES(structure_bsp->clusters.count));
 
-	if (location->cluster_index != NONE)
+	/* port: guard cluster_index against active structure_bsp cluster count in Multi-BSP mode */
+	if (location->cluster_index != NONE &&
+		location->cluster_index >= 0 &&
+		location->cluster_index < structure_bsp->clusters.count)
 	{
 		short cluster_index;
 
@@ -4101,6 +4106,8 @@ void actors_handle_unit_effect(
 	{
 		if (iterator.index != owner_actor_index &&
 			actor->input.position.body_location.cluster_index != NONE &&
+			actor->input.position.body_location.cluster_index >= 0 &&
+			actor->input.position.body_location.cluster_index < structure_bsp->clusters.count &&
 			BIT_VECTOR_TEST_FLAG(audible_clusters, actor->input.position.body_location.cluster_index))
 		{
 			struct actor_position_data sense_position;
@@ -4205,6 +4212,34 @@ static void actor_update(
 	long actor_index)
 {
 	struct actor_datum *actor = actor_get(actor_index);
+	short previous_bsp = scenario_get_active_bsp_index();
+	short actor_bsp = NONE;
+
+	/* port: in Multi-BSP mode, bind the actor's BSP context so pathfinding, firing positions, and LOS raycasts use its BSP */
+	if (scenario_multi_bsp_active())
+	{
+		long check_unit_index = actor->meta.swarm ? actor->meta.swarm_unit_index : actor->meta.unit_index;
+		if (check_unit_index != NONE && object_try_and_get(check_unit_index))
+		{
+			actor_bsp = object_get_bsp_index(object_get_ultimate_parent(check_unit_index));
+		}
+		if (actor_bsp == NONE && actor->meta.encounter_index != NONE)
+		{
+			struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
+				&global_scenario_get()->ai_encounters,
+				DATUM_INDEX_TO_ABSOLUTE_INDEX(actor->meta.encounter_index),
+				struct encounter_definition);
+			actor_bsp = encounter_definition->runtime_structure_bsp_reference_index;
+		}
+		if (actor_bsp != NONE && scenario_bsp_index_is_loaded(actor_bsp))
+		{
+			scenario_set_active_bsp_context(actor_bsp);
+		}
+		else
+		{
+			actor_bsp = NONE;
+		}
+	}
 
 	actor_update_begin(actor_index);
 	if (actor_general_update(actor_index))
@@ -4240,6 +4275,10 @@ static void actor_update(
 		}
 	}
 	actor_update_end();
+	if (actor_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
+	}
 
 	return;
 }

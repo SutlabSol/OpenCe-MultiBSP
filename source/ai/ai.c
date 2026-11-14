@@ -1565,6 +1565,12 @@ void ai_disconnect_from_structure_bsp(
 	struct scenario *scenario = global_scenario_get();
 	short encounter_index;
 
+	/* port: in Multi-BSP mode, all BSPs stay loaded and encounters/actors remain active across BSPs */
+	if (scenario_multi_bsp_active())
+	{
+		return;
+	}
+
 	for (encounter_index = 0;
 		encounter_index < scenario->ai_encounters.count;
 		encounter_index++)
@@ -1826,7 +1832,8 @@ void ai_reconnect_to_structure_bsp(
 				DATUM_INDEX_TO_ABSOLUTE_INDEX(actor->meta.disconnected_encounter_index),
 				struct encounter_definition);
 
-			if (encounter->runtime_structure_bsp_reference_index == structure_bsp_index)
+			if (encounter->runtime_structure_bsp_reference_index == structure_bsp_index ||
+				(scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(encounter->runtime_structure_bsp_reference_index)))
 			{
 				encounterless_detach_actor(actor_index);
 				encounter_attach_actor(

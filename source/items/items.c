@@ -304,7 +304,7 @@ static long item_rested_surface_index(
 static struct collision_surface const *item_rested_surface(
 	struct item_datum const *item)
 {
-	struct collision_bsp const *bsp = global_collision_bsp_get();
+	struct collision_bsp const *bsp = scenario_collision_bsp_get_by_index(item->item.bsp_index);
 	long surface_index = item_rested_surface_index(item);
 
 	if (!bsp || surface_index < 0 || surface_index >= bsp->surfaces.count)
@@ -395,7 +395,7 @@ void item_accelerate(
 				real_plane3d plane;
 				real distance_above;
 
-				collision_bsp = global_collision_bsp_get();
+				collision_bsp = scenario_collision_bsp_get_by_index(item->item.bsp_index);
 				surface = item_rested_surface(item);
 				if (surface)
 				{
@@ -720,7 +720,7 @@ boolean item_update(
 						SET_FLAG(item->item.flags, _item_on_structure_bit, TRUE);
 						item_set_rested_surface(item, collision.surface_index);
 						item->item.bsp_index =
-							global_structure_bsp_index_get();
+							scenario_get_active_bsp_index();
 						break;
 
 					case _collision_result_object:
@@ -805,7 +805,8 @@ boolean item_update(
 
 			if (TEST_FLAG(item->item.flags, _item_on_structure_bit) &&
 				item_rested_surface_index(item) != NONE &&
-				item->item.bsp_index == global_structure_bsp_index_get())
+				(item->item.bsp_index == scenario_get_active_bsp_index() ||
+					scenario_bsp_index_is_loaded(item->item.bsp_index)))
 			{
 				struct collision_surface const *surface;
 

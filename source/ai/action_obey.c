@@ -487,7 +487,9 @@ boolean action_obey_command_list_setup(
 			}
 		}
 		else if (command_list->runtime_structure_bsp_reference_index != NONE &&
-			command_list->runtime_structure_bsp_reference_index != global_structure_bsp_index)
+			command_list->runtime_structure_bsp_reference_index != global_structure_bsp_index &&
+			/* port: allow command lists in any loaded BSP when Multi-BSP is active */
+			!(scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(command_list->runtime_structure_bsp_reference_index)))
 		{
 			error(
 				_error_silent,

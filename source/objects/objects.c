@@ -236,6 +236,28 @@ static struct memory_pool *object_memory_pool = NULL;
 static struct object_globals *object_globals = NULL;
 /* port: (by the object's absolute index) */
 static struct object_function_inputs object_function_inputs[MAXIMUM_OBJECTS_PER_MAP];
+/* port: the structure BSP index each object is currently connected to */
+static short object_bsp_index[MAXIMUM_OBJECTS_PER_MAP];
+
+short object_get_bsp_index(
+	long object_index)
+{
+	long root_index;
+	short abs_index;
+
+	if (object_index == NONE)
+		return global_structure_bsp_index_get();
+	root_index = object_get_ultimate_parent(object_index);
+	if (root_index == NONE)
+		root_index = object_index;
+	abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(root_index);
+	if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP &&
+		scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+	{
+		return object_bsp_index[abs_index];
+	}
+	return global_structure_bsp_index_get();
+}
 
 boolean debug_objects_names;
 boolean debug_objects_pathfinding_spheres;
@@ -645,13 +667,10 @@ short objects_get_activating_cluster_index(
 
 			if (TEST_FLAG(parent_object->object.flags, _object_connected_to_map_bit))
 			{
-				if (parent_object->object.location.cluster_index!=NONE)
+				if (parent_object->object.location.cluster_index!=NONE &&
+					parent_object->object.location.cluster_index>=0 &&
+					parent_object->object.location.cluster_index<global_structure_bsp_get()->clusters.count)
 				{
-					match_assert(
-						"c:\\halo\\SOURCE\\objects\\objects.c",
-						2279,
-						parent_object->object.location.cluster_index>=0 &&
-						parent_object->object.location.cluster_index<global_structure_bsp_get()->clusters.count);
 					result = parent_object->object.location.cluster_index;
 				}
 			}
@@ -1125,6 +1144,7 @@ void objects_initialize_for_new_map(
 	/* port: (zeroed for a new map only: a revert or a load brings them back with the bipeds' snapshots) */
 	vehicle_riding_objects_reset();
 	object_name_list_clear();
+	csmemset(object_bsp_index, 0xFF, sizeof(object_bsp_index));
 
 	cluster_partition_make_valid(&collideable_object_cluster_partition);
 	cluster_partition_make_valid(&noncollideable_object_cluster_partition);
@@ -1880,7 +1900,10 @@ boolean object_visible_to_any_player(
 		const unsigned long* pvs = players_get_combined_pvs();
 
 		for (cluster_index = object_get_first_cluster(&iterator, object_index);
-			cluster_index!=NONE && !BIT_VECTOR_TEST_FLAG(pvs, cluster_index);
+			cluster_index!=NONE &&
+				(cluster_index < 0 ||
+				cluster_index >= global_structure_bsp_get()->clusters.count ||
+				!BIT_VECTOR_TEST_FLAG(pvs, cluster_index));
 			cluster_index = object_get_next_cluster(&iterator, object_index))
 		{
 			;
@@ -2033,6 +2056,51 @@ void object_reconnect_to_map(
 		optimising compiler is free to break (release builds crashed placing
 		objects at level start, reading a stack slot reused meanwhile) */
 		struct location bounding_sphere_location;
+		short prev_bsp = scenario_get_active_bsp_index();
+		short obj_bsp = prev_bsp;
+		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+		if (scenario_multi_bsp_active())
+		{
+			short found_bsp;
+
+			if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP &&
+				scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+			{
+				obj_bsp = object_bsp_index[abs_index];
+				scenario_set_active_bsp_context(obj_bsp);
+			}
+
+			if (!location)
+			{
+				found_bsp = scenario_find_bsp_for_point(&object->object.bounding_sphere_center, &bounding_sphere_location);
+				if (found_bsp == NONE)
+					found_bsp = scenario_find_bsp_for_point(&object->object.position, &bounding_sphere_location);
+				if (found_bsp != NONE)
+				{
+					obj_bsp = found_bsp;
+					scenario_set_active_bsp_context(obj_bsp);
+					location = &bounding_sphere_location;
+				}
+			}
+			else if (location->cluster_index == NONE ||
+				!VALID_INDEX(location->cluster_index, global_structure_bsp_get()->clusters.count) ||
+				bsp3d_test_point(global_bsp3d_get(), 0, &object->object.bounding_sphere_center) == NONE)
+			{
+				found_bsp = scenario_find_bsp_for_point(&object->object.bounding_sphere_center, &bounding_sphere_location);
+				if (found_bsp == NONE)
+					found_bsp = scenario_find_bsp_for_point(&object->object.position, &bounding_sphere_location);
+				if (found_bsp != NONE)
+				{
+					obj_bsp = found_bsp;
+					scenario_set_active_bsp_context(obj_bsp);
+					location = &bounding_sphere_location;
+				}
+			}
+		}
+
+		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+			object_bsp_index[abs_index] = obj_bsp;
 
 		if (!location)
 		{
@@ -2072,7 +2140,8 @@ void object_reconnect_to_map(
 
 		if (TEST_FLAG(header->flags, _object_header_automatically_deactivate_bit))
 		{
-			if (header->cluster_index==NONE || !BIT_VECTOR_TEST_FLAG(players_get_combined_pvs(), header->cluster_index))
+			if (header->cluster_index==NONE ||
+				(!scenario_multi_bsp_active() && !BIT_VECTOR_TEST_FLAG(players_get_combined_pvs(), header->cluster_index)))
 			{
 				if (TEST_FLAG(object->object.flags, _object_deleted_when_deactivated_bit))
 				{
@@ -2084,6 +2153,9 @@ void object_reconnect_to_map(
 				object_activate(object_index);
 			}
 		}
+
+		if (scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(prev_bsp))
+			scenario_set_active_bsp_context(prev_bsp);
 	}
 
 	SET_FLAG(object->object.flags, _object_connected_to_map_bit, TRUE);
@@ -4009,10 +4081,15 @@ static boolean object_update(
 	struct object_header_datum *header = object_header_get(object_index);
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
+	short prev_bsp = scenario_get_active_bsp_index();
+	short obj_bsp = object_get_bsp_index(object_index);
 
 	boolean result = TRUE;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))
 	{
+		if (scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(obj_bsp))
+			scenario_set_active_bsp_context(obj_bsp);
+
 		/* port: (vehicle_riding.c) */
 		object_count_update(object_index);
 
@@ -4080,6 +4157,9 @@ static boolean object_update(
 		}
 
 		object_postprocess_node_matrices(object_index);
+
+		if (scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(prev_bsp))
+			scenario_set_active_bsp_context(prev_bsp);
 	}
 
 	return result;
@@ -4665,7 +4745,8 @@ void objects_update(
 				if (TEST_FLAG(object_header->flags, _object_header_active_bit))
 				{
 					match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 369, object_header->cluster_index!=NONE);
-					if (!BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
+					if (!scenario_multi_bsp_active() &&
+						!BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
 					{
 						if (TEST_FLAG(object_header->datum->object.flags, _object_deleted_when_deactivated_bit))
 						{
@@ -4680,7 +4761,8 @@ void objects_update(
 				else if (
 					!TEST_FLAG(object_header->flags, _object_header_child_bit) &&
 					object_header->cluster_index != NONE &&
-					BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index)
+					(scenario_multi_bsp_active() ||
+						BIT_VECTOR_TEST_FLAG(active_cluster_bits, object_header->cluster_index))
 				)
 				{
 					object_activate(i);

@@ -1553,6 +1553,12 @@ void lights_disconnect_from_structure_bsp(
 {
 	long light_index;
 
+	/* port: in Multi-BSP mode, keep lights connected across BSP switches */
+	if (scenario_multi_bsp_active())
+	{
+		return;
+	}
+
 	for (light_index = data_next_index(light_data, NONE);
 		light_index != NONE;
 		light_index = data_next_index(light_data, light_index))
@@ -1573,6 +1579,12 @@ void lights_reconnect_to_structure_bsp(
 	void)
 {
 	long light_index;
+
+	/* port: in Multi-BSP mode, lights remain connected to their respective BSPs */
+	if (scenario_multi_bsp_active())
+	{
+		return;
+	}
 
 	for (light_index = data_next_index(light_data, NONE);
 		light_index != NONE;
@@ -1988,6 +2000,9 @@ void light_reconnect_to_map(
 
 	if (TEST_FLAG(light->flags, _point_light_connects_to_map_bit))
 	{
+		short previous_bsp = scenario_get_active_bsp_index();
+		short light_bsp = NONE;
+
 		light_compute_bounding_sphere(
 			light_index,
 			TRUE,
@@ -2001,11 +2016,31 @@ void light_reconnect_to_map(
 			!TEST_FLAG(light->flags, _point_light_connected_to_map_bit));
 		if (light->object_index != NONE && object_try_and_get(light->object_index))
 		{
+			/* port: connect light in its parent object's BSP partition */
+			if (scenario_multi_bsp_active())
+			{
+				light_bsp = object_get_bsp_index(object_get_ultimate_parent(light->object_index));
+				if (light_bsp != NONE)
+				{
+					scenario_set_active_bsp_context(light_bsp);
+				}
+			}
 			object_get_location(light->object_index, &location);
 		}
 		else
 		{
-			scenario_location_from_point(&location, &position);
+			if (scenario_multi_bsp_active())
+			{
+				light_bsp = scenario_find_bsp_for_point(&position, &location);
+				if (light_bsp != NONE)
+				{
+					scenario_set_active_bsp_context(light_bsp);
+				}
+			}
+			else
+			{
+				scenario_location_from_point(&location, &position);
+			}
 		}
 		cluster_partition_reconnect(
 			&light_cluster_partition,
@@ -2014,6 +2049,10 @@ void light_reconnect_to_map(
 			&position,
 			radius,
 			&location);
+		if (scenario_multi_bsp_active() && light_bsp != NONE)
+		{
+			scenario_set_active_bsp_context(previous_bsp);
+		}
 		SET_FLAG(light->flags, _point_light_connected_to_map_bit, TRUE);
 	}
 
@@ -2100,7 +2139,9 @@ static boolean lights_port_cluster(
 	short *first_entry,
 	short *entry_count)
 {
-	unsigned long generation = 1 + light_cluster_partition.port_modification_count + lights_port.radius_writes;
+	/* port: include active BSP index in generation so switching BSP context invalidates cached cluster light lists */
+	unsigned long generation = 1 + light_cluster_partition.port_modification_count + lights_port.radius_writes +
+		((unsigned long)(scenario_get_active_bsp_index() & 0xFF) << 24);
 	long reference_index;
 	long light_index;
 	short first;
@@ -2322,6 +2363,18 @@ void lights_prepare_for_object_dynamic(
 	real light_attenuations[MAXIMUM_RENDERED_POINT_LIGHTS];
 	short cluster_index;
 	short light_index;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short object_bsp = NONE;
+
+	/* port: query dynamic lights in the object's own BSP cluster partition */
+	if (scenario_multi_bsp_active())
+	{
+		object_bsp = object_get_bsp_index(object_get_ultimate_parent(object_index));
+		if (object_bsp != NONE)
+		{
+			scenario_set_active_bsp_context(object_bsp);
+		}
+	}
 
 	object_get_bounding_sphere(object_index, &center, &radius);
 	lighting->point_light_count = 0;
@@ -2342,6 +2395,10 @@ void lights_prepare_for_object_dynamic(
 			MAXIMUM_RENDERED_POINT_LIGHTS);
 	}
 	light_marker_end();
+	if (scenario_multi_bsp_active() && object_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
+	}
 	/* (port: and a light the window had no room for, with no rasterizer
 	index, lights nothing: left out) */
 	{
@@ -2622,11 +2679,22 @@ void lights_prepare_for_object_static(
 	short sample_count;
 	short corner_index;
 	boolean sampled;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short object_bsp = NONE;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		970,
 		lighting);
+	/* port: sample static lightmap in the object's own BSP */
+	if (scenario_multi_bsp_active())
+	{
+		object_bsp = object_get_bsp_index(object_get_ultimate_parent(object_index));
+		if (object_bsp != NONE)
+		{
+			scenario_set_active_bsp_context(object_bsp);
+		}
+	}
 	if (TEST_FLAG(object->object.flags, _object_static_lighting_raycast_sideways_bit))
 	{
 		SET_FLAG(flags, _distant_lighting_raycast_sideways_bit, TRUE);
@@ -2642,6 +2710,10 @@ void lights_prepare_for_object_static(
 		lighting);
 	if (TEST_FLAG(object->object.flags, _object_static_lighting_recompute_bit))
 	{
+		if (scenario_multi_bsp_active() && object_bsp != NONE)
+		{
+			scenario_set_active_bsp_context(previous_bsp);
+		}
 		return;
 	}
 	if (sampled)
@@ -2728,6 +2800,11 @@ void lights_prepare_for_object_static(
 	else if (sample_count == 0)
 	{
 		*lighting = sample;
+	}
+
+	if (scenario_multi_bsp_active() && object_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
 	}
 
 	return;

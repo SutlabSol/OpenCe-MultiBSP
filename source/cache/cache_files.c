@@ -273,6 +273,31 @@ extern struct cache_file_tag_instance *global_tag_instances;
 the table (port/linux/game/menu_tags.c); the map's tag header keeps its own,
 which a Custom Edition map's loader goes on reading. */
 static long global_tag_count;
+
+/* port: multi-BSP resident cache so all structure BSPs in a scenario remain loaded simultaneously */
+struct resident_bsp_entry
+{
+	long tag_index;
+	void *allocation;
+	long size;
+	struct cache_file_structure_bsp_header *header;
+};
+
+static struct resident_bsp_entry resident_bsps[32];
+
+static struct resident_bsp_entry *resident_bsp_find(
+	long tag_index)
+{
+	long i;
+
+	for (i = 0; i < NUMBEROF(resident_bsps); i++)
+	{
+		if (resident_bsps[i].allocation && resident_bsps[i].tag_index == tag_index)
+			return &resident_bsps[i];
+	}
+
+	return NULL;
+}
 static char const *data_00316820[] =
 {
 	"d:\\maps_de\\",
@@ -395,7 +420,30 @@ boolean cache_file_tag_cache_contains(
 		tag_cache_size = CUSTOM_EDITION_TAG_CACHE_BYTES;
 	}
 
-	return tag_cache && size > 0 && cache_file_region_contains(tag_cache, tag_cache_size, address, 1, size);
+	if (tag_cache && size > 0 && cache_file_region_contains(tag_cache, tag_cache_size, address, 1, size))
+		return TRUE;
+
+	/* port: check resident multi-BSP allocations */
+	if (size > 0)
+	{
+		long i;
+
+		for (i = 0; i < NUMBEROF(resident_bsps); i++)
+		{
+			if (resident_bsps[i].allocation &&
+				cache_file_region_contains(
+					resident_bsps[i].allocation,
+					(unsigned long)resident_bsps[i].size,
+					address,
+					1,
+					size))
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
 }
 
 /* port: whether the tag header of the tags just read (tag_data_size bytes
@@ -635,6 +683,40 @@ void scenario_tags_unload(
 		menu_tags_unloaded();
 	}
 	cache_file_close();
+	/* port: release any resident multi-BSP allocations before unloading tags */
+	{
+		long i;
+		boolean had_resident_ce_bsp = FALSE;
+
+		for (i = 0; i < NUMBEROF(resident_bsps); i++)
+		{
+			if (resident_bsps[i].allocation)
+			{
+#ifdef HALO_ANDROID
+				if (resident_bsps[i].header)
+				{
+					struct cache_file_structure_bsp_header *bsp = resident_bsps[i].header;
+
+					xgpu_static_buffers_remove(bsp->vertex_buffers, bsp->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+					xgpu_static_buffers_remove(bsp->index_buffers, bsp->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+					xgpu_static_range_remove(resident_bsps[i].allocation, 1);
+				}
+#endif
+				if (resident_bsps[i].header)
+					structure_bsp_header_deregister_vertex_buffers(resident_bsps[i].header);
+				if (custom_edition_cache_tags_loaded())
+					had_resident_ce_bsp = TRUE;
+				XPhysicalFree(resident_bsps[i].allocation);
+				resident_bsps[i].allocation = NULL;
+				resident_bsps[i].header = NULL;
+				resident_bsps[i].tag_index = NONE;
+				resident_bsps[i].size = 0;
+			}
+		}
+		if (had_resident_ce_bsp)
+			custom_edition_structure_bsp_unload();
+		cache_file_globals.structure_bsp_header = NULL;
+	}
 	/* port: an MCC map's tags and buffers are its own (mcc_cache.c) */
 	if (mcc_cache_tags_loaded())
 	{
@@ -1463,6 +1545,17 @@ boolean scenario_structure_bsp_load(
 	byte *tag_cache_base_address;
 	/* port: the bsp's header, once read and checked */
 	struct cache_file_structure_bsp_header *structure_bsp_header;
+	struct resident_bsp_entry *existing_resident;
+	long resident_slot = NONE;
+
+	/* port: if this BSP is already resident in memory, activate its header and tag base address */
+	existing_resident = resident_bsp_find(reference->structure_bsp.index);
+	if (existing_resident)
+	{
+		cache_file_globals.structure_bsp_header = existing_resident->header;
+		cache_get_tag_instance(reference->structure_bsp.index)->base_address = existing_resident->header->base_address;
+		return TRUE;
+	}
 
 	/* port: an MCC map's bsp is read and converted by mcc_cache.c */
 	if (mcc_cache_tags_loaded())
@@ -1569,11 +1662,56 @@ boolean scenario_structure_bsp_load(
 	{
 		return FALSE;
 	}
+
+	/* port: relocate the validated structure BSP into a dedicated contiguous allocation
+	so multiple BSPs can remain resident simultaneously without overwriting each other */
+	{
+		long i;
+		void *resident_alloc = NULL;
+
+		for (i = 0; i < NUMBEROF(resident_bsps); i++)
+		{
+			if (!resident_bsps[i].allocation)
+			{
+				resident_slot = i;
+				break;
+			}
+		}
+		if (resident_slot != NONE)
+		{
+			resident_alloc = XPhysicalAlloc(
+				(unsigned long)reference->file_size,
+				(unsigned long)-1,
+				0,
+				PAGE_READWRITE);
+		}
+		if (resident_alloc)
+		{
+			csmemcpy(resident_alloc, reference->base_address, (size_t)reference->file_size);
+			tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
+			structure_bsp_header = (struct cache_file_structure_bsp_header *)resident_alloc;
+			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
+			resident_bsps[resident_slot].allocation = resident_alloc;
+			resident_bsps[resident_slot].size = reference->file_size;
+			resident_bsps[resident_slot].header = structure_bsp_header;
+		}
+	}
+
 	/* port: a Halo Custom Edition bsp has no Xbox vertex buffers: its
 	materials' vertices, as checked, are compressed and given buffers
 	(port/linux/game/custom_edition_geometry.c) */
 	if (custom_edition_cache_tags_loaded() && !custom_edition_structure_bsp_load(structure_bsp_header->base_address))
+	{
+		if (resident_slot != NONE && resident_bsps[resident_slot].allocation)
+		{
+			XPhysicalFree(resident_bsps[resident_slot].allocation);
+			resident_bsps[resident_slot].allocation = NULL;
+			resident_bsps[resident_slot].header = NULL;
+			resident_bsps[resident_slot].tag_index = NONE;
+			resident_bsps[resident_slot].size = 0;
+		}
 		return FALSE;
+	}
 
 	cache_file_globals.structure_bsp_header = structure_bsp_header;
 	match_assert(
@@ -1586,13 +1724,16 @@ boolean scenario_structure_bsp_load(
 	buffer to the bsp's end, and the indices its surfaces draw: a Custom
 	Edition bsp's too, whose vertices custom_edition_geometry.c gave buffers) */
 	{
-		const void *end = (const byte *)reference->base_address + reference->file_size;
+		const void *base_ptr = (resident_slot != NONE && resident_bsps[resident_slot].allocation)
+			? resident_bsps[resident_slot].allocation
+			: reference->base_address;
+		const void *end = (const byte *)base_ptr + reference->file_size;
 
 		xgpu_static_buffers_add(structure_bsp_header->vertex_buffers, structure_bsp_header->vertex_buffer_count,
 			CACHE_FILE_BUFFER_SIZE, 0, end);
 		xgpu_static_buffers_add(structure_bsp_header->index_buffers, structure_bsp_header->index_buffer_count,
 			CACHE_FILE_BUFFER_SIZE, 0, end);
-		xgpu_static_range_add(reference->base_address, (unsigned long)reference->file_size, 1);
+		xgpu_static_range_add(base_ptr, (unsigned long)reference->file_size, 1);
 	}
 #endif
 	tag_instance = cache_get_tag_instance(reference->structure_bsp.index);
@@ -1613,6 +1754,16 @@ void scenario_structure_bsp_unload(
 	struct scenario_structure_bsp_reference *reference)
 {
 	struct cache_file_tag_instance *tag_instance;
+	struct resident_bsp_entry *existing_resident;
+
+	/* port: keep resident multi-BSP allocations alive across BSP switches until scenario_tags_unload */
+	existing_resident = resident_bsp_find(reference->structure_bsp.index);
+	if (existing_resident)
+	{
+		cache_get_tag_instance(reference->structure_bsp.index)->base_address = existing_resident->header->base_address;
+		cache_file_globals.structure_bsp_header = NULL;
+		return;
+	}
 
 	/* port: an MCC map's bsp (mcc_cache.c) */
 	if (mcc_cache_tags_loaded())

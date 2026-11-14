@@ -134,7 +134,9 @@ static boolean vehicles_anchor(struct coop_vehicle_home *home, struct vehicle_da
 	csmemcpy(home->placement.change_colors, vehicle->object.base_change_colors, sizeof(home->placement.change_colors));
 	home->center = vehicle->object.bounding_sphere_center;
 	home->radius = vehicle->object.bounding_sphere_radius;
-	home->bsp = global_structure_bsp_index;
+	home->bsp = scenario_multi_bsp_active() ? object_get_bsp_index(home->current) : global_structure_bsp_index;
+	if (home->bsp == NONE)
+		home->bsp = global_structure_bsp_index;
 	return TRUE;
 }
 
@@ -151,7 +153,9 @@ static boolean vehicles_home_clear(struct coop_vehicle_home const *home)
 	long indices[64];
 	short index, count;
 
-	if (home->bsp != global_structure_bsp_index || definition->object.physics.index == NONE)
+	if ((home->bsp != global_structure_bsp_index &&
+			!(scenario_multi_bsp_active() && scenario_bsp_index_is_loaded(home->bsp))) ||
+		definition->object.physics.index == NONE)
 		return FALSE;
 	scenario_location_from_point(&location, &home->center);
 	if (location.leaf_index == NONE || location.cluster_index == NONE)

@@ -340,6 +340,10 @@ boolean tag_validate_structure_bsp(
 	long tag_index,
 	void *base,
 	long size);
+void tag_relocate_structure_bsp(
+	void *old_base,
+	long size,
+	void *new_base);
 
 /* how many corrections the last validation made (none for a retail map) */
 long tag_validate_corrections(

@@ -984,7 +984,11 @@ void compute_sound_obstruction(
 		source->spatialization_mode==_sound_spatialization_mode_absolute);
 
 	if (source->location.game_location.cluster_index != NONE &&
-		camera->location.cluster_index != NONE)
+		camera->location.cluster_index != NONE &&
+		source->location.game_location.cluster_index >= 0 &&
+		source->location.game_location.cluster_index < global_structure_bsp_get()->clusters.count &&
+		camera->location.cluster_index >= 0 &&
+		camera->location.cluster_index < global_structure_bsp_get()->clusters.count)
 	{
 		struct structure_bsp *structure_bsp = global_structure_bsp_get();
 		byte encoded_distance = structure_bsp_get_cluster_encoded_sound_distance(
@@ -1071,7 +1075,9 @@ static void compute_combined_pas(
 		{
 			struct observer_result const *camera = observer_get_camera(local_player_index);
 
-			if (camera->location.cluster_index != NONE)
+			if (camera->location.cluster_index != NONE &&
+				camera->location.cluster_index >= 0 &&
+				camera->location.cluster_index < structure_bsp->clusters.count)
 			{
 				short cluster_index;
 
@@ -1100,10 +1106,11 @@ static void compute_combined_pas(
 static boolean location_potentially_audible(
 	struct location *location)
 {
-	match_assert(
-		"c:\\halo\\SOURCE\\sound\\game_sound.c",
-		870,
-		location->cluster_index>=NONE && location->cluster_index<global_structure_bsp_get()->clusters.count);
+	/* port: in Multi-BSP mode, sounds from objects in other BSPs may have cluster indices >= active BSP clusters.count */
+	if (location->cluster_index < 0 || location->cluster_index >= global_structure_bsp_get()->clusters.count)
+	{
+		return scenario_multi_bsp_active() && location->cluster_index != NONE;
+	}
 
 	return location->cluster_index != NONE
 		&& BIT_VECTOR_TEST_FLAG(combined_pas, location->cluster_index);

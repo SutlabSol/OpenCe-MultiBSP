@@ -92,6 +92,10 @@ void reference_list_copy(
 static long *cluster_partition_get_first_reference(
 	struct cluster_partition *partition,
 	short cluster_index);
+static long *cluster_partition_get_first_reference_for_bsp(
+	struct cluster_partition *partition,
+	short bsp_index,
+	short cluster_index);
 static void cluster_partition_port_forget(
 	struct cluster_partition *partition);
 static long cluster_partition_port_add(
@@ -229,6 +233,21 @@ void cluster_partition_new(
 		__FILE__, __LINE__);
 	partition->port_cluster_data_references = debug_malloc(HALO_PORT_MAXIMUM_CLUSTER_REFERENCES * sizeof(long), FALSE,
 		__FILE__, __LINE__);
+	partition->port_cluster_reference_bsp = debug_malloc(HALO_PORT_MAXIMUM_CLUSTER_REFERENCES * sizeof(short), FALSE,
+		__FILE__, __LINE__);
+	{
+		short bsp_slot;
+
+		partition->port_bsp_cluster_first_data_references[0] = partition->cluster_first_data_references;
+		for (bsp_slot = 1; bsp_slot < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; bsp_slot++)
+		{
+			partition->port_bsp_cluster_first_data_references[bsp_slot] = debug_malloc(
+				MAXIMUM_CLUSTERS_PER_STRUCTURE * sizeof(long),
+				FALSE,
+				__FILE__,
+				__LINE__);
+		}
+	}
 	cluster_partition_port_forget(partition);
 	if (cluster_partitions_port_count < MAXIMUM_PORT_CLUSTER_PARTITIONS)
 		cluster_partitions_port[cluster_partitions_port_count++] = partition;
@@ -239,10 +258,22 @@ void cluster_partition_new(
 void cluster_partition_make_valid(
 	struct cluster_partition *partition)
 {
+	short bsp_slot;
+
 	csmemset(
 		partition->cluster_first_data_references,
 		NONE,
 		MAXIMUM_CLUSTERS_PER_STRUCTURE * sizeof(*partition->cluster_first_data_references));
+	for (bsp_slot = 1; bsp_slot < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; bsp_slot++)
+	{
+		if (partition->port_bsp_cluster_first_data_references[bsp_slot])
+		{
+			csmemset(
+				partition->port_bsp_cluster_first_data_references[bsp_slot],
+				NONE,
+				MAXIMUM_CLUSTERS_PER_STRUCTURE * sizeof(long));
+		}
+	}
 	data_make_valid(partition->cluster_reference_data);
 	data_make_valid(partition->data_reference_data);
 	cluster_partition_port_forget(partition);
@@ -424,6 +455,7 @@ void cluster_partition_reconnect(
 	for (cluster_index_index = 0; cluster_index_index < cluster_count; cluster_index_index++)
 	{
 		short const cluster_index = cluster_indices[cluster_index_index];
+		short const bsp_index = scenario_get_active_bsp_index();
 		/* port: reference_list_add's, noting where the references are */
 		long cluster_reference_index = cluster_partition_port_add(
 			partition->cluster_reference_data,
@@ -432,15 +464,23 @@ void cluster_partition_reconnect(
 			NULL);
 		long data_reference_index = cluster_partition_port_add(
 			partition->data_reference_data,
-			cluster_partition_get_first_reference(partition, cluster_index),
+			cluster_partition_get_first_reference_for_bsp(partition, bsp_index, cluster_index),
 			datum_index,
 			partition->port_previous_references);
 
 		partition->port_modification_count++;
-		if (cluster_reference_index != NONE && partition->port_cluster_data_references)
+		if (cluster_reference_index != NONE)
 		{
-			partition->port_cluster_data_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
-				data_reference_index;
+			if (partition->port_cluster_data_references)
+			{
+				partition->port_cluster_data_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
+					data_reference_index;
+			}
+			if (partition->port_cluster_reference_bsp)
+			{
+				partition->port_cluster_reference_bsp[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] =
+					bsp_index;
+			}
 		}
 	}
 
@@ -462,6 +502,11 @@ void cluster_partition_disconnect(
 		short const cluster_index = (short)cluster_reference->datum_index;
 		long data_reference_index = partition->port_cluster_data_references ?
 			partition->port_cluster_data_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] : NONE;
+		short bsp_index = partition->port_cluster_reference_bsp ?
+			partition->port_cluster_reference_bsp[DATUM_INDEX_TO_ABSOLUTE_INDEX(cluster_reference_index)] : NONE;
+
+		if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+			bsp_index = scenario_get_active_bsp_index();
 
 		datum_delete(partition->cluster_reference_data, cluster_reference_index);
 
@@ -469,7 +514,7 @@ void cluster_partition_disconnect(
 		put */
 		cluster_partition_port_remove(
 			partition,
-			cluster_partition_get_first_reference(partition, cluster_index),
+			cluster_partition_get_first_reference_for_bsp(partition, bsp_index, cluster_index),
 			datum_index,
 			data_reference_index);
 
@@ -512,6 +557,8 @@ static void cluster_partition_port_forget(
 		csmemset(partition->port_previous_references, 0xFF, HALO_PORT_MAXIMUM_CLUSTER_REFERENCES * sizeof(long));
 	if (partition->port_cluster_data_references)
 		csmemset(partition->port_cluster_data_references, 0xFF, HALO_PORT_MAXIMUM_CLUSTER_REFERENCES * sizeof(long));
+	if (partition->port_cluster_reference_bsp)
+		csmemset(partition->port_cluster_reference_bsp, 0xFF, HALO_PORT_MAXIMUM_CLUSTER_REFERENCES * sizeof(short));
 }
 
 /* reference_list_add's, and the new reference's place: first, before the
@@ -619,22 +666,34 @@ static void cluster_partition_port_remove(
 		previous_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(next_index)] = previous_index;
 }
 
-static long *cluster_partition_get_first_reference(
+static long *cluster_partition_get_first_reference_for_bsp(
 	struct cluster_partition *partition,
+	short bsp_index,
 	short cluster_index)
 {
-	match_assert(
-		"c:\\halo\\SOURCE\\structures\\cluster_partitions.c",
-		0xd5,
-		cluster_index>=0 && cluster_index<global_structure_bsp_get()->clusters.count);
+	long *first_references = partition->cluster_first_data_references;
 
-	/* port: a cluster index that fits no cluster's list has an empty list
-	(what is put in it is not kept), not one past the lists */
 	if (cluster_index < 0 || cluster_index >= MAXIMUM_CLUSTERS_PER_STRUCTURE)
 	{
 		cluster_partition_port_no_cluster_first_reference = NONE;
 		return &cluster_partition_port_no_cluster_first_reference;
 	}
+	if (bsp_index >= 0 &&
+		bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+		partition->port_bsp_cluster_first_data_references[bsp_index])
+	{
+		first_references = partition->port_bsp_cluster_first_data_references[bsp_index];
+	}
 
-	return &partition->cluster_first_data_references[cluster_index];
+	return &first_references[cluster_index];
+}
+
+static long *cluster_partition_get_first_reference(
+	struct cluster_partition *partition,
+	short cluster_index)
+{
+	return cluster_partition_get_first_reference_for_bsp(
+		partition,
+		scenario_get_active_bsp_index(),
+		cluster_index);
 }

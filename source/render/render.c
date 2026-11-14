@@ -77,6 +77,7 @@ symbols in this file:
 #include "ui_widget.h"
 #include "bink_playback.h"
 #include "game.h"
+#include "game/players.h" /* port: Multi-BSP player_datum access in render_player_frame */
 #include "game_engine.h"
 #include "interface/first_person_weapons.h"
 #include "interface/interface.h"
@@ -461,9 +462,48 @@ static void render_player_frame(
 	struct render_frustum frustum;
 	struct render_frustum rasterizer_frustum;
 	struct render_mirror mirror;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short camera_bsp = NONE;
 
 	camera = &window->render_camera;
 	has_mirror = FALSE;
+
+	/* port: in Multi-BSP mode, switch active BSP context to the BSP containing this player window's camera */
+	if (scenario_multi_bsp_active())
+	{
+		struct location camera_location;
+		short point_bsp;
+
+		if (window->local_player_index != NONE)
+		{
+			long player_index = local_player_get_player_index(window->local_player_index);
+			if (player_index != NONE)
+			{
+				struct player_datum *player = player_try_and_get(player_index);
+				if (player && player->unit_index != NONE && object_try_and_get(player->unit_index))
+				{
+					camera_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+					if (camera_bsp != NONE && scenario_bsp_index_is_loaded(camera_bsp))
+					{
+						scenario_set_active_bsp_context(camera_bsp);
+					}
+				}
+			}
+		}
+		point_bsp = scenario_find_bsp_for_point(&camera->position, &camera_location);
+		if (point_bsp != NONE)
+		{
+			camera_bsp = point_bsp;
+		}
+		if (camera_bsp != NONE && scenario_bsp_index_is_loaded(camera_bsp))
+		{
+			scenario_set_active_bsp_context(camera_bsp);
+		}
+		else
+		{
+			camera_bsp = NONE;
+		}
+	}
 
 	structure_visibility_find_camera(camera);
 	render.fog.runtime_flags = 0;
@@ -598,6 +638,11 @@ static void render_player_frame(
 		&rasterizer_frustum,
 		_render_target_primary,
 		has_mirror);
+
+	if (camera_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
+	}
 
 	return;
 }

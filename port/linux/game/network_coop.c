@@ -3388,7 +3388,7 @@ boolean network_coop_player_has_structure_bsp(
 {
 	struct player_datum *player;
 
-	if (!network_coop_active())
+	if (!network_coop_active() || scenario_multi_bsp_active())
 		return TRUE;
 	/* (no player, or none of the tracked: whose BSP is not known, which
 	does not keep their predictions out) */
@@ -3590,7 +3590,7 @@ void network_coop_handle_object_names(
 
 	if (!coop_client())
 		return;
-	if (names->structure_bsp_index != global_structure_bsp_index_get() ||
+	if ((!scenario_multi_bsp_active() && names->structure_bsp_index != global_structure_bsp_index_get()) ||
 		names->name_count != MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO))
 	{
 		csmemset(client_names_differing, 0, sizeof(client_names_differing));

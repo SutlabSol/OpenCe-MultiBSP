@@ -187,11 +187,14 @@ struct custom_edition_geometry_globals
 	struct part_palette *palettes;
 	long palette_count;
 
-	/* the structure BSP whose materials have buffers, and the compressed
+	/* the structure BSPs whose materials have buffers, and the compressed
 	vertices those were made from */
-	struct structure_bsp *structure_bsp;
-	byte *structure_bsp_vertices;
-	boolean structure_bsp_vertices_contiguous;
+	struct
+	{
+		struct structure_bsp *bsp;
+		byte *vertices;
+		boolean contiguous;
+	} bsp_slots[32];
 };
 
 /* ---------- globals */
@@ -965,8 +968,19 @@ boolean custom_edition_structure_bsp_load(
 	boolean success = TRUE;
 	boolean too_large = FALSE;
 	long lightmap_index;
+	long slot = NONE;
+	long i;
 
-	assert(!globals->structure_bsp);
+	for (i = 0; i < NUMBEROF(globals->bsp_slots); i++)
+	{
+		if (globals->bsp_slots[i].bsp == structure_bsp)
+			return TRUE;
+		if (slot == NONE && !globals->bsp_slots[i].bsp)
+			slot = i;
+	}
+	if (slot == NONE)
+		return FALSE;
+
 	/* the Custom Edition buffer fields name nothing in this process: every
 	material starts with none, so that a failure releases only what was
 	made (cache_file_formats.c checked the counts and sizes) */
@@ -1004,21 +1018,21 @@ boolean custom_edition_structure_bsp_load(
 		}
 	}
 
-	globals->structure_bsp = structure_bsp;
+	globals->bsp_slots[slot].bsp = structure_bsp;
 	if (too_large)
 	{
 		error(_error_silent, "custom edition: the structure BSP's materials take more than 0x%X bytes of vertices",
 			MAXIMUM_GEOMETRY_BYTES);
-		custom_edition_structure_bsp_unload();
+		globals->bsp_slots[slot].bsp = NULL;
 		return FALSE;
 	}
 	/* (in Xbox memory either way: the material points at them by Xbox address) */
-	globals->structure_bsp_vertices = geometry_allocate(vertices_size + 1,
-		&globals->structure_bsp_vertices_contiguous);
-	if (!globals->structure_bsp_vertices)
+	globals->bsp_slots[slot].vertices = geometry_allocate(vertices_size + 1,
+		&globals->bsp_slots[slot].contiguous);
+	if (!globals->bsp_slots[slot].vertices)
 	{
 		error(_error_silent, "custom edition: out of memory for 0x%lX bytes of structure BSP vertices", vertices_size);
-		custom_edition_structure_bsp_unload();
+		globals->bsp_slots[slot].bsp = NULL;
 		return FALSE;
 	}
 	for (lightmap_index = 0; success && lightmap_index < structure_bsp->lightmaps.count; lightmap_index++)
@@ -1036,7 +1050,7 @@ boolean custom_edition_structure_bsp_load(
 				material_index,
 				struct structure_material);
 
-			success = structure_material_convert(material, globals->structure_bsp_vertices + vertices_offset);
+			success = structure_material_convert(material, globals->bsp_slots[slot].vertices + vertices_offset);
 			vertices_offset += material->compressed_vertex_data.size;
 		}
 	}
@@ -1051,7 +1065,10 @@ boolean custom_edition_structure_bsp_load(
 	else
 	{
 		error(_error_silent, "custom edition: cannot make the buffers of the structure BSP's materials");
-		custom_edition_structure_bsp_unload();
+		structure_bsp_buffers_release(globals->bsp_slots[slot].bsp);
+		geometry_free(globals->bsp_slots[slot].vertices, globals->bsp_slots[slot].contiguous);
+		globals->bsp_slots[slot].bsp = NULL;
+		globals->bsp_slots[slot].vertices = NULL;
 	}
 
 	return success;
@@ -1061,15 +1078,18 @@ void custom_edition_structure_bsp_unload(
 	void)
 {
 	struct custom_edition_geometry_globals *globals = &custom_edition_geometry_globals;
+	long i;
 
-	if (globals->structure_bsp)
+	for (i = 0; i < NUMBEROF(globals->bsp_slots); i++)
 	{
-		structure_bsp_buffers_release(globals->structure_bsp);
-		/* (none when the load failed before they were made) */
-		if (globals->structure_bsp_vertices)
-			geometry_free(globals->structure_bsp_vertices, globals->structure_bsp_vertices_contiguous);
-		globals->structure_bsp = NULL;
-		globals->structure_bsp_vertices = NULL;
+		if (globals->bsp_slots[i].bsp)
+		{
+			structure_bsp_buffers_release(globals->bsp_slots[i].bsp);
+			if (globals->bsp_slots[i].vertices)
+				geometry_free(globals->bsp_slots[i].vertices, globals->bsp_slots[i].contiguous);
+			globals->bsp_slots[i].bsp = NULL;
+			globals->bsp_slots[i].vertices = NULL;
+		}
 	}
 
 	return;

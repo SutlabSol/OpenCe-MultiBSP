@@ -416,6 +416,11 @@ unsigned long const *players_get_combined_pvs_local(
 unsigned long const *players_get_combined_pvs(
 	void);
 
+/* port: Multi-BSP combined PVS for a specific structure BSP */
+boolean players_compute_combined_pvs_for_bsp(
+	short bsp_index,
+	unsigned long *combined_pvs);
+
 void player_control_fix_for_loaded_game_state(void);
 
 void player_handle_powerup_minor(

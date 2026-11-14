@@ -282,6 +282,159 @@ static byte bss_004c0520[0x375] = { 0 };
 struct bsp3d *global_bsp3d;
 struct game_globals *global_game_globals;
 
+/* port: simultaneous multi-BSP state */
+static boolean scenario_multi_bsp_enabled = FALSE;
+static short active_structure_bsp_index = NONE;
+static struct structure_bsp *scenario_loaded_structure_bsps[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO];
+static struct collision_bsp *scenario_loaded_collision_bsps[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO];
+static struct bsp3d *scenario_loaded_bsp3ds[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO];
+
+boolean scenario_multi_bsp_active(
+	void)
+{
+	return scenario_multi_bsp_enabled;
+}
+
+boolean scenario_bsp_index_is_loaded(
+	short bsp_index)
+{
+	if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+		return FALSE;
+	if (scenario_loaded_structure_bsps[bsp_index] != NULL)
+		return TRUE;
+	return bsp_index == global_structure_bsp_index && global_structure_bsp != NULL;
+}
+
+short scenario_get_active_bsp_index(
+	void)
+{
+	if (active_structure_bsp_index != NONE)
+		return active_structure_bsp_index;
+	return global_structure_bsp_index;
+}
+
+boolean scenario_set_active_bsp_context(
+	short bsp_index)
+{
+	if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO ||
+		!scenario_loaded_structure_bsps[bsp_index])
+	{
+		return FALSE;
+	}
+	active_structure_bsp_index = bsp_index;
+	global_structure_bsp = scenario_loaded_structure_bsps[bsp_index];
+	global_collision_bsp = scenario_loaded_collision_bsps[bsp_index];
+	global_bsp3d = scenario_loaded_bsp3ds[bsp_index];
+	return TRUE;
+}
+
+void scenario_restore_primary_bsp_context(
+	void)
+{
+	if (global_structure_bsp_index >= 0 &&
+		global_structure_bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+		scenario_loaded_structure_bsps[global_structure_bsp_index])
+	{
+		active_structure_bsp_index = global_structure_bsp_index;
+		global_structure_bsp = scenario_loaded_structure_bsps[global_structure_bsp_index];
+		global_collision_bsp = scenario_loaded_collision_bsps[global_structure_bsp_index];
+		global_bsp3d = scenario_loaded_bsp3ds[global_structure_bsp_index];
+	}
+}
+
+struct structure_bsp *scenario_structure_bsp_get_by_index(
+	short bsp_index)
+{
+	if (bsp_index >= 0 && bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+		scenario_loaded_structure_bsps[bsp_index])
+	{
+		return scenario_loaded_structure_bsps[bsp_index];
+	}
+	return global_structure_bsp;
+}
+
+struct collision_bsp *scenario_collision_bsp_get_by_index(
+	short bsp_index)
+{
+	if (bsp_index >= 0 && bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+		scenario_loaded_collision_bsps[bsp_index])
+	{
+		return scenario_loaded_collision_bsps[bsp_index];
+	}
+	return global_collision_bsp;
+}
+
+static boolean scenario_test_point_in_bsp(
+	short bsp_index,
+	real_point3d const *point,
+	struct location *out_location)
+{
+	struct structure_bsp *bsp;
+	struct bsp3d *bsp3d;
+	long leaf_index;
+	long cluster_index;
+
+	if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+		return FALSE;
+	bsp = scenario_loaded_structure_bsps[bsp_index];
+	bsp3d = scenario_loaded_bsp3ds[bsp_index];
+	if (!bsp || !bsp3d)
+		return FALSE;
+
+	leaf_index = bsp3d_test_point(bsp3d, 0, point);
+	if (leaf_index == NONE || (leaf_index & LONG_MAX) >= bsp->leaves.count)
+		return FALSE;
+
+	cluster_index = TAG_BLOCK_GET_ELEMENT(
+		&bsp->leaves,
+		leaf_index & LONG_MAX,
+		struct structure_leaf)->cluster_index;
+	if (cluster_index != NONE && !VALID_INDEX(cluster_index, bsp->clusters.count))
+		return FALSE;
+
+	if (out_location)
+	{
+		out_location->leaf_index = leaf_index;
+		out_location->cluster_index = (short)cluster_index;
+		out_location->bonus = NONE;
+	}
+	return TRUE;
+}
+
+short scenario_find_bsp_for_point(
+	real_point3d const *point,
+	struct location *out_location)
+{
+	short bsp_index;
+	short current_active = scenario_get_active_bsp_index();
+
+	if (current_active != NONE && scenario_test_point_in_bsp(current_active, point, out_location))
+		return current_active;
+
+	if (global_structure_bsp_index != NONE &&
+		global_structure_bsp_index != current_active &&
+		scenario_test_point_in_bsp(global_structure_bsp_index, point, out_location))
+	{
+		return global_structure_bsp_index;
+	}
+
+	for (bsp_index = 0; bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; bsp_index++)
+	{
+		if (bsp_index == current_active || bsp_index == global_structure_bsp_index)
+			continue;
+		if (scenario_test_point_in_bsp(bsp_index, point, out_location))
+			return bsp_index;
+	}
+
+	if (out_location)
+	{
+		out_location->leaf_index = NONE;
+		out_location->cluster_index = NONE;
+		out_location->bonus = NONE;
+	}
+	return NONE;
+}
+
 /* ---------- public code */
 
 static void scenario_call_disconnect_from_structure_bsp_procs(
@@ -371,6 +524,11 @@ void scenario_unload(
 	/* port: release pointers into the bsp before its tags go away */
 	structure_culling_dispose();
 	scenario_tags_unload();
+	scenario_multi_bsp_enabled = FALSE;
+	active_structure_bsp_index = NONE;
+	csmemset(scenario_loaded_structure_bsps, 0, sizeof(scenario_loaded_structure_bsps));
+	csmemset(scenario_loaded_collision_bsps, 0, sizeof(scenario_loaded_collision_bsps));
+	csmemset(scenario_loaded_bsp3ds, 0, sizeof(scenario_loaded_bsp3ds));
 	global_scenario_index = NONE;
 	global_structure_bsp_index = NONE;
 	scenario_globals->structure_bsp_index = NONE;
@@ -484,11 +642,20 @@ struct material_definition *scenario_material_definition_get(
 boolean scenario_location_deafening(
 	const struct location *location)
 {
-	struct structure_cluster *cluster = TAG_BLOCK_GET_ELEMENT(
+	struct structure_cluster *cluster;
+	boolean deafening = FALSE;
+
+	/* port: guard cluster index when multi-BSP is active */
+	if (!location || location->cluster_index < 0 ||
+		location->cluster_index >= global_structure_bsp_get()->clusters.count)
+	{
+		return FALSE;
+	}
+
+	cluster = TAG_BLOCK_GET_ELEMENT(
 		&global_structure_bsp_get()->clusters,
 		location->cluster_index,
 		struct structure_cluster);
-	boolean deafening = FALSE;
 
 	/* port: and not below the palette (a map's index) */
 	if (cluster->background_sound_palette_index >= 0 &&
@@ -567,7 +734,18 @@ short global_structure_bsp_index_get(
 long scenario_leaf_index_from_point(
 	const union real_point3d *point)
 {
-	return bsp3d_test_point(global_bsp3d_get(), 0, point);
+	long leaf_index = bsp3d_test_point(global_bsp3d_get(), 0, point);
+
+	/* port: fall back to other loaded BSPs if outside active BSP */
+	if (leaf_index == NONE && scenario_multi_bsp_enabled)
+	{
+		struct location loc;
+
+		if (scenario_find_bsp_for_point(point, &loc) != NONE)
+			leaf_index = loc.leaf_index;
+	}
+
+	return leaf_index;
 }
 
 boolean scenario_ensure_point_within_world(
@@ -575,7 +753,8 @@ boolean scenario_ensure_point_within_world(
 {
 	short iteration_count = 0;
 
-	while (bsp3d_test_point(global_bsp3d_get(), 0, point) == NONE)
+	while (bsp3d_test_point(global_bsp3d_get(), 0, point) == NONE &&
+		(!scenario_multi_bsp_enabled || scenario_find_bsp_for_point(point, NULL) == NONE))
 	{
 		if (iteration_count++ >= 150)
 			break;
@@ -598,7 +777,8 @@ short scenario_get_fog_region_index(
 	struct fog_definition *fog;
 	long fog_index;
 
-	if (location->cluster_index != NONE)
+	if (location->cluster_index != NONE &&
+		VALID_INDEX(location->cluster_index, global_structure_bsp_get()->clusters.count))
 	{
 		structure_bsp = global_structure_bsp_get();
 		cluster = TAG_BLOCK_GET_ELEMENT(
@@ -677,7 +857,8 @@ boolean scenario_location_underwater(
 		weather_palette_index = fog_region->weather_palette_index;
 	}
 
-	if (weather_palette_index == NONE && location->cluster_index != NONE)
+	if (weather_palette_index == NONE && location->cluster_index != NONE &&
+		VALID_INDEX(location->cluster_index, structure_bsp->clusters.count))
 	{
 		cluster = TAG_BLOCK_GET_ELEMENT(
 			&structure_bsp->clusters,
@@ -710,7 +891,8 @@ real scenario_location_water_depth(
 	struct fog_definition *fog;
 	real_plane3d *plane;
 
-	if (location->cluster_index != NONE)
+	if (location->cluster_index != NONE &&
+		VALID_INDEX(location->cluster_index, global_structure_bsp_get()->clusters.count))
 	{
 		structure_bsp = global_structure_bsp_get();
 		cluster = TAG_BLOCK_GET_ELEMENT(
@@ -873,7 +1055,15 @@ boolean scenario_test_pvs(
 	short cluster_index1)
 {
 	struct structure_bsp *structure_bsp = global_structure_bsp_get();
-	unsigned long *pvs = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index0);
+	unsigned long *pvs;
+
+	/* port: guard cluster bounds when multi-BSP is active */
+	if (cluster_index0 < 0 || cluster_index0 >= structure_bsp->clusters.count ||
+		cluster_index1 < 0 || cluster_index1 >= structure_bsp->clusters.count)
+	{
+		return FALSE;
+	}
+	pvs = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index0);
 
 	match_assert("c:\\halo\\SOURCE\\scenario\\scenario.c", 468,
 		cluster_index1>=0 && cluster_index1<structure_bsp->clusters.count);
@@ -884,6 +1074,13 @@ boolean scenario_test_pvs(
 boolean scenario_location_potentially_visible_local(
 	const struct location *location)
 {
+	/* port: guard cluster bounds across multiple BSPs */
+	if (location->cluster_index < 0 ||
+		location->cluster_index >= global_structure_bsp_get()->clusters.count)
+	{
+		return TRUE;
+	}
+
 	match_assert("c:\\halo\\SOURCE\\scenario\\scenario.c", 487,
 		location->cluster_index>=0 && location->cluster_index<global_structure_bsp_get()->clusters.count);
 
@@ -893,6 +1090,13 @@ boolean scenario_location_potentially_visible_local(
 boolean scenario_location_potentially_visible(
 	const struct location *location)
 {
+	/* port: guard cluster bounds across multiple BSPs */
+	if (location->cluster_index < 0 ||
+		location->cluster_index >= global_structure_bsp_get()->clusters.count)
+	{
+		return TRUE;
+	}
+
 	match_assert("c:\\halo\\SOURCE\\scenario\\scenario.c", 495,
 		location->cluster_index>=0 && location->cluster_index<global_structure_bsp_get()->clusters.count);
 
@@ -1079,6 +1283,34 @@ boolean scenario_switch_structure_bsp(
 		had_old_structure_bsp = FALSE;
 
 		match_assert("c:\\halo\\SOURCE\\scenario\\scenario.c", 0x2B7, global_scenario);
+
+		/* port: when all BSPs are resident in multi-BSP mode, switching the primary BSP
+		neither unloads the previous BSP nor disconnects objects/AI/lights in other BSPs */
+		if (scenario_multi_bsp_enabled && scenario_loaded_structure_bsps[structure_bsp_index])
+		{
+			main_stop_time();
+			collision_log_enable(FALSE);
+
+			scenario_structure_bsp_load(reference);
+			global_structure_bsp = scenario_loaded_structure_bsps[structure_bsp_index];
+			global_collision_bsp = scenario_loaded_collision_bsps[structure_bsp_index];
+			global_bsp3d = scenario_loaded_bsp3ds[structure_bsp_index];
+			scenario_globals->structure_bsp_index = structure_bsp_index;
+			global_structure_bsp_index = structure_bsp_index;
+			active_structure_bsp_index = structure_bsp_index;
+			structure_culling_structure_bsp_loaded();
+
+			object_types_reconnect_to_structure_bsp();
+			ai_reconnect_to_structure_bsp();
+			observer_reconnect_to_structure_bsp();
+			players_reconnect_to_structure_bsp();
+			sound_reconnect_to_structure_bsp();
+
+			collision_log_enable(TRUE);
+			main_start_time();
+			return TRUE;
+		}
+
 		main_stop_time();
 		collision_log_enable(FALSE);
 
@@ -1163,6 +1395,10 @@ boolean scenario_switch_structure_bsp(
 				struct collision_bsp);
 			scenario_globals->structure_bsp_index = structure_bsp_index;
 			global_structure_bsp_index = structure_bsp_index;
+			active_structure_bsp_index = structure_bsp_index;
+			scenario_loaded_structure_bsps[structure_bsp_index] = global_structure_bsp;
+			scenario_loaded_collision_bsps[structure_bsp_index] = global_collision_bsp;
+			scenario_loaded_bsp3ds[structure_bsp_index] = global_bsp3d;
 			/* port: cache buckets while the newly current bsp's tags are loaded */
 			structure_culling_structure_bsp_loaded();
 
@@ -1186,8 +1422,17 @@ boolean scenario_test_pas(
 	short cluster_index1)
 {
 	struct structure_bsp *structure_bsp = global_structure_bsp_get();
-	unsigned long *pvs0 = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index0);
-	unsigned long *pvs1 = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index1);
+	unsigned long *pvs0;
+	unsigned long *pvs1;
+
+	/* port: guard cluster bounds when multi-BSP is active */
+	if (cluster_index0 < 0 || cluster_index0 >= structure_bsp->clusters.count ||
+		cluster_index1 < 0 || cluster_index1 >= structure_bsp->clusters.count)
+	{
+		return FALSE;
+	}
+	pvs0 = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index0);
+	pvs1 = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index1);
 
 	return bit_vector_and((short)structure_bsp->clusters.count, pvs0, pvs1, NULL);
 }
@@ -1227,7 +1472,63 @@ boolean scenario_load(
 			global_game_globals = game_globals_definition_get(
 				tag_loaded(GAME_GLOBALS_TAG, "globals\\globals"));
 			if (scenario_switch_structure_bsp(0))
+			{
 				result = TRUE;
+				/* port: preload all remaining structure BSPs in the scenario so all BSPs
+				stay resident simultaneously for co-op and campaign play */
+				if (!mcc_cache_tags_loaded() &&
+					global_scenario->structure_bsp_references.count > 1)
+				{
+					short bsp_index;
+					short bsp_count = (short)MIN(
+						global_scenario->structure_bsp_references.count,
+						MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
+					short loaded_count = 1;
+
+					for (bsp_index = 1; bsp_index < bsp_count; bsp_index++)
+					{
+						struct scenario_structure_bsp_reference *ref = TAG_BLOCK_GET_ELEMENT(
+							&global_scenario->structure_bsp_references,
+							bsp_index,
+							struct scenario_structure_bsp_reference);
+
+						if (scenario_structure_bsp_load(ref))
+						{
+							struct structure_bsp *bsp = structure_bsp_definition_get(ref->structure_bsp.index);
+
+							if (structure_bsp_port_verify(bsp))
+							{
+								scenario_loaded_structure_bsps[bsp_index] = bsp;
+								scenario_loaded_collision_bsps[bsp_index] = TAG_BLOCK_GET_ELEMENT(
+									&bsp->collision_bsp,
+									0,
+									struct collision_bsp);
+								scenario_loaded_bsp3ds[bsp_index] = (struct bsp3d *)scenario_loaded_collision_bsps[bsp_index];
+								active_structure_bsp_index = bsp_index;
+								global_structure_bsp = bsp;
+								global_collision_bsp = scenario_loaded_collision_bsps[bsp_index];
+								global_bsp3d = scenario_loaded_bsp3ds[bsp_index];
+								structure_culling_structure_bsp_loaded();
+								loaded_count++;
+							}
+							else
+							{
+								scenario_structure_bsp_unload(ref);
+							}
+						}
+					}
+					scenario_structure_bsp_load(TAG_BLOCK_GET_ELEMENT(
+						&global_scenario->structure_bsp_references,
+						0,
+						struct scenario_structure_bsp_reference));
+					active_structure_bsp_index = 0;
+					global_structure_bsp = scenario_loaded_structure_bsps[0];
+					global_collision_bsp = scenario_loaded_collision_bsps[0];
+					global_bsp3d = scenario_loaded_bsp3ds[0];
+					if (loaded_count > 1)
+						scenario_multi_bsp_enabled = TRUE;
+				}
+			}
 		}
 		else
 		{
@@ -1310,6 +1611,9 @@ void scenario_get_sound_environment(
 					0xC5,
 					global_structure_bsp);
 				structure_bsp = global_structure_bsp;
+				/* port: guard cluster index when camera is in a different BSP with more clusters */
+				if (!VALID_INDEX(camera->location.cluster_index, structure_bsp->clusters.count))
+					continue;
 				cluster = TAG_BLOCK_GET_ELEMENT(
 					&structure_bsp->clusters,
 					camera->location.cluster_index,

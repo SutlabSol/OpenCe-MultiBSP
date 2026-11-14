@@ -152,6 +152,26 @@ void scenario_get_current_from_weather_palette(
 	long flags,
 	short weather_palette_index);
 
+/* port: simultaneous multi-BSP runtime support */
+struct location;
+boolean scenario_multi_bsp_active(
+	void);
+boolean scenario_bsp_index_is_loaded(
+	short bsp_index);
+short scenario_get_active_bsp_index(
+	void);
+boolean scenario_set_active_bsp_context(
+	short bsp_index);
+void scenario_restore_primary_bsp_context(
+	void);
+struct structure_bsp *scenario_structure_bsp_get_by_index(
+	short bsp_index);
+struct collision_bsp *scenario_collision_bsp_get_by_index(
+	short bsp_index);
+short scenario_find_bsp_for_point(
+	real_point3d const *point,
+	struct location *out_location);
+
 /* ---------- globals */
 
 extern long global_scenario_index;

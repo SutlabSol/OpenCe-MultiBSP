@@ -104,6 +104,7 @@ symbols in this file:
 #include "observer.h"
 
 #include "game/players.h"
+#include "objects/objects.h" /* port: Multi-BSP object_get_bsp_index in observer_update */
 #include "networking/network_connection.h"
 #include "cache/predicted_resources.h"
 #include "physics/collisions.h"
@@ -416,7 +417,7 @@ struct observer_result const *observer_get_camera(
 		match_assert(
 			"c:\\halo\\SOURCE\\camera\\observer.c",
 			0x12D,
-			observer->result.location.cluster_index>=NONE && observer->result.location.cluster_index<global_structure_bsp_get()->clusters.count);
+			observer->result.location.cluster_index>=NONE && (scenario_multi_bsp_active() || observer->result.location.cluster_index<global_structure_bsp_get()->clusters.count));
 	}
 
 	return result;
@@ -1341,7 +1342,35 @@ void observer_update(
 			{
 				observer_pass_time(local_player_index);
 			}
-			observer_postcheck(local_player_index);
+			/* port: in Multi-BSP mode, raycast observer camera collision and location against the local player's BSP */
+			if (scenario_multi_bsp_active())
+			{
+				short previous_bsp = scenario_get_active_bsp_index();
+				short observer_bsp = NONE;
+				long player_index = local_player_get_player_index(local_player_index);
+				if (player_index != NONE)
+				{
+					struct player_datum *player = player_try_and_get(player_index);
+					if (player && player->unit_index != NONE)
+					{
+						observer_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+					}
+				}
+				if (observer_bsp == NONE)
+				{
+					observer_bsp = scenario_find_bsp_for_point(&observer->focus_position, NULL);
+				}
+				if (observer_bsp != NONE && scenario_bsp_index_is_loaded(observer_bsp))
+				{
+					scenario_set_active_bsp_context(observer_bsp);
+				}
+				observer_postcheck(local_player_index);
+				scenario_set_active_bsp_context(previous_bsp);
+			}
+			else
+			{
+				observer_postcheck(local_player_index);
+			}
 
 			match_assert(
 				"c:\\halo\\SOURCE\\camera\\observer.c",

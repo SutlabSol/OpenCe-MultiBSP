@@ -43,6 +43,7 @@ data and which the game takes as models (tag_schema_custom_edition_groups).
 
 #include "cseries.h"
 #include "cache/physical_memory_map.h"
+#include "structures/structure_bsp_definitions.h"
 #include "tag_schema.h"
 #include "mcc_tag_validate.h" /* MCC callbacks have an independent context. */
 
@@ -1694,6 +1695,162 @@ boolean tag_validate_structure_bsp(
 	tag_validate_globals.corrections += validation.corrections;
 
 	return !validation.refused;
+}
+
+static void relocate_pointer(
+	void **ptr,
+	unsigned long old_start,
+	unsigned long old_end,
+	long delta)
+{
+	unsigned long addr = (unsigned long)(*ptr);
+
+	if (addr >= old_start && addr < old_end)
+	{
+		*ptr = (void *)((long)addr + delta);
+	}
+}
+
+static void relocate_schema_fields(
+	byte *base,
+	struct tag_schema_definition const *definition,
+	unsigned long old_start,
+	unsigned long old_end,
+	long delta,
+	int depth)
+{
+	struct tag_schema_field const *field;
+
+	if (!base || !definition || depth >= MAXIMUM_VALIDATION_DEPTH)
+		return;
+
+	for (field = definition->fields; field->type != _tag_schema_terminator; field++)
+	{
+		short index;
+
+		for (index = 0; index < field->count; index++)
+		{
+			byte *address = base + field->offset + index * field->size;
+
+			switch (field->type)
+			{
+			case _tag_schema_struct:
+				relocate_schema_fields(address, field->definition, old_start, old_end, delta, depth + 1);
+				break;
+			case _tag_schema_block:
+			{
+				struct tag_block *block = (struct tag_block *)address;
+				struct tag_schema_definition const *element_definition = field->definition;
+
+				relocate_pointer(&block->address, old_start, old_end, delta);
+				if (block->count > 0 && block->address && element_definition && element_definition->size > 0)
+				{
+					long elem;
+
+					for (elem = 0; elem < block->count; elem++)
+					{
+						relocate_schema_fields(
+							(byte *)block->address + (unsigned long)elem * element_definition->size,
+							element_definition,
+							old_start,
+							old_end,
+							delta,
+							depth + 1);
+					}
+				}
+				break;
+			}
+			case _tag_schema_data:
+			{
+				struct tag_data *data = (struct tag_data *)address;
+
+				relocate_pointer(&data->address, old_start, old_end, delta);
+				break;
+			}
+			case _tag_schema_reference:
+			{
+				struct tag_reference *reference = (struct tag_reference *)address;
+
+				relocate_pointer((void **)&reference->name, old_start, old_end, delta);
+				break;
+			}
+			default:
+				break;
+			}
+		}
+	}
+}
+
+void tag_relocate_structure_bsp(
+	void *old_base,
+	long size,
+	void *new_base)
+{
+	unsigned long old_start = (unsigned long)old_base;
+	unsigned long old_end = old_start + (unsigned long)size;
+	long delta = (long)((unsigned long)new_base - old_start);
+	struct tag_validate_structure_bsp_header *bsp_header = (struct tag_validate_structure_bsp_header *)new_base;
+	struct tag_schema_group const *group = schema_group_get(STRUCTURE_BSP_GROUP_TAG);
+	long i;
+
+	if (!old_base || !new_base || size <= 0 || delta == 0)
+		return;
+
+	relocate_pointer(&bsp_header->base_address, old_start, old_end, delta);
+	relocate_pointer((void **)&bsp_header->vertex_buffers, old_start, old_end, delta);
+	relocate_pointer((void **)&bsp_header->index_buffers, old_start, old_end, delta);
+
+	if (bsp_header->vertex_buffers && bsp_header->vertex_buffer_count > 0)
+	{
+		for (i = 0; i < bsp_header->vertex_buffer_count; i++)
+		{
+			relocate_pointer(
+				(void **)(bsp_header->vertex_buffers + (unsigned long)i * BUFFER_SIZE + 4),
+				old_start,
+				old_end,
+				delta);
+		}
+	}
+
+	if (bsp_header->index_buffers && bsp_header->index_buffer_count > 0)
+	{
+		for (i = 0; i < bsp_header->index_buffer_count; i++)
+		{
+			relocate_pointer(
+				(void **)(bsp_header->index_buffers + (unsigned long)i * BUFFER_SIZE + 4),
+				old_start,
+				old_end,
+				delta);
+		}
+	}
+
+	if (group && group->definition && bsp_header->base_address)
+	{
+		struct structure_bsp *bsp = (struct structure_bsp *)bsp_header->base_address;
+		long l, m;
+
+		relocate_schema_fields((byte *)bsp, group->definition, old_start, old_end, delta, 0);
+		relocate_pointer(&bsp->markers.address, old_start, old_end, delta);
+
+		for (l = 0; l < bsp->lightmaps.count; l++)
+		{
+			struct structure_lightmap *lightmap = TAG_BLOCK_GET_ELEMENT(
+				&bsp->lightmaps,
+				l,
+				struct structure_lightmap);
+
+			for (m = 0; m < lightmap->materials.count; m++)
+			{
+				struct structure_material *material = TAG_BLOCK_GET_ELEMENT(
+					&lightmap->materials,
+					m,
+					struct structure_material);
+
+				relocate_pointer(&material->vertices.hardware_format, old_start, old_end, delta);
+				relocate_pointer(&material->lightmap_vertices.hardware_format, old_start, old_end, delta);
+			}
+		}
+	}
 }
 
 long tag_validate_corrections(

@@ -2529,8 +2529,11 @@ static void ai_scripting_migrate_internal(
 							actor->meta.disconnected_encounter_index = target_encounter_index;
 							actor->meta.disconnected_squad_index = target_squad_indices[current_squad_index];
 							if (!same_encounter &&
-								target_encounter_definition->runtime_structure_bsp_reference_index ==
-									global_structure_bsp_index_get())
+								(target_encounter_definition->runtime_structure_bsp_reference_index ==
+									global_structure_bsp_index_get() ||
+								/* port: allow reattaching in any loaded BSP when Multi-BSP is active */
+								(scenario_multi_bsp_active() &&
+									scenario_bsp_index_is_loaded(target_encounter_definition->runtime_structure_bsp_reference_index))))
 							{
 								encounterless_detach_actor(iterator.index);
 								encounter_attach_actor(

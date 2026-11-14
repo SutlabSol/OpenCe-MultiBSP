@@ -91,8 +91,10 @@ static boolean warned_about_breakable_surfaces;
 struct breakable_surface_datum *breakable_surface_get(
 	short breakable_surface_index)
 {
+	short bsp_index = scenario_get_active_bsp_index();
+
 	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 61, globals);
-	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 62, global_structure_bsp_index>=0 && global_structure_bsp_index<MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
+	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 62, bsp_index>=0 && bsp_index<MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
 	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 63, breakable_surface_index>=0 && breakable_surface_index<MAXIMUM_BREAKABLE_SURFACES_PER_MAP);
 
 	/* port: (breakable_surface_scratch) */
@@ -102,7 +104,7 @@ struct breakable_surface_datum *breakable_surface_get(
 		return &breakable_surface_scratch;
 	}
 
-	return &globals->breakable_surfaces[global_structure_bsp_index][breakable_surface_index];
+	return &globals->breakable_surfaces[bsp_index][breakable_surface_index];
 }
 
 void breakable_surfaces_initialize(
@@ -169,8 +171,10 @@ void breakable_surfaces_reset(
 byte *breakable_surface_flags_get(
 	void)
 {
+	short bsp_index = scenario_get_active_bsp_index();
+
 	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 138, globals);
-	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 139, global_structure_bsp_index>=0 && global_structure_bsp_index<MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
+	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 139, bsp_index>=0 && bsp_index<MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
 
 	/* port: (breakable_surface_scratch: all there) */
 	if (!breakable_surface_indices_valid(0))
@@ -179,7 +183,7 @@ byte *breakable_surface_flags_get(
 		return breakable_surface_flags_scratch;
 	}
 
-	return globals->breakable_surface_flags[global_structure_bsp_index];
+	return globals->breakable_surface_flags[bsp_index];
 }
 
 boolean breakable_surface_extant(
@@ -338,19 +342,21 @@ breakable surface index fit the globals (NONE, no bsp, is not reported) */
 static boolean breakable_surface_indices_valid(
 	short breakable_surface_index)
 {
-	if (global_structure_bsp_index >= 0 &&
-		global_structure_bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+	short bsp_index = scenario_get_active_bsp_index();
+
+	if (bsp_index >= 0 &&
+		bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
 		breakable_surface_index >= 0 &&
 		breakable_surface_index < MAXIMUM_BREAKABLE_SURFACES_PER_MAP)
 	{
 		return TRUE;
 	}
 
-	if (global_structure_bsp_index != NONE && !warned_about_breakable_surfaces)
+	if (bsp_index != NONE && !warned_about_breakable_surfaces)
 	{
 		error(_error_silent, "breakable surface #%d of structure bsp #%d is past the engine's %d of %d bsps",
 			breakable_surface_index,
-			global_structure_bsp_index,
+			bsp_index,
 			MAXIMUM_BREAKABLE_SURFACES_PER_MAP,
 			MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
 		warned_about_breakable_surfaces = TRUE;
