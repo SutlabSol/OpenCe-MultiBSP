@@ -509,7 +509,7 @@ void cluster_partition_reconnect(
 		}
 	}
 
-	/* Multi-BSP: also connect objects and lights located in BSP transition/overlap
+	/* port: Multi-BSP: also connect objects and lights located in BSP transition/overlap
 	   zones into every other loaded BSP whose geometry contains or intersects the
 	   bounding sphere, so doors, controls, scenery, weapons, units, projectiles,
 	   and dynamic lights in overlap corridors remain visible from either BSP. */

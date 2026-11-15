@@ -174,9 +174,9 @@ enum
 	/* each event is sent in this many ticks' messages */
 	EVENT_SENDS = 3,
 
-	/* the size of devices.c's device group array (devices_initialize's;
-	every index into the arrays below is checked against this too) */
-	MAXIMUM_DEVICE_GROUPS = HALO_PORT_MAXIMUM_DEVICE_GROUPS,
+	/* the size of distributed_coop_device_groups_message's groups array;
+	the runtime device group tables use HALO_PORT_MAXIMUM_DEVICE_GROUPS */
+	MAXIMUM_DEVICE_GROUPS = 1024,
 	/* a changed group is sent in this many ticks' messages */
 	DEVICE_GROUP_SENDS = 3,
 	/* unchanged groups sent each tick, in rotation */
@@ -202,8 +202,8 @@ enum
 	MAXIMUM_DROPPED_VEHICLES = 5,
 };
 
-/* (devices.c's literal count: a change there is one here) */
-typedef char device_groups_count_assert[MAXIMUM_DEVICE_GROUPS == HALO_PORT_MAXIMUM_DEVICE_GROUPS ? 1 : -1];
+/* (the wire format's literal count: a change there is one here) */
+typedef char device_groups_count_assert[MAXIMUM_DEVICE_GROUPS == 1024 ? 1 : -1];
 
 /* distributed_coop_event.kind */
 enum
@@ -515,15 +515,15 @@ static struct
 {
 	/* false until the first tick, which records the map's starting state */
 	boolean started;
-	real values[MAXIMUM_DEVICE_GROUPS];
-	byte flags[MAXIMUM_DEVICE_GROUPS];
-	byte snaps[MAXIMUM_DEVICE_GROUPS];
+	real values[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
+	byte flags[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
+	byte snaps[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
 	/* ticks this group is still to be sent as a change */
-	byte sends[MAXIMUM_DEVICE_GROUPS];
+	byte sends[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
 	/* immediate sets so far (devices.c calls network_coop_note_device_snap) */
-	byte snap_counts[MAXIMUM_DEVICE_GROUPS];
+	byte snap_counts[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
 	/* whether this group has changed since the map loaded */
-	boolean moved[MAXIMUM_DEVICE_GROUPS];
+	boolean moved[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
 	short refresh_next, moved_refresh_next;
 	struct distributed_coop_device_groups_message message;
 } host_devices;
@@ -565,8 +565,8 @@ static struct coop_checkpoint_players checkpoint_players;
 /* client: the host's snap count last seen for each of its groups */
 static struct
 {
-	byte snaps[MAXIMUM_DEVICE_GROUPS];
-	boolean seen[MAXIMUM_DEVICE_GROUPS];
+	byte snaps[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
+	boolean seen[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
 } client_devices;
 
 /* client: the script sounds (impulse ones: dialogue) it played lately,
@@ -806,7 +806,7 @@ static boolean device_group_state(
 	word flags;
 	boolean runtime;
 
-	if (group_index < 0 || group_index >= MAXIMUM_DEVICE_GROUPS ||
+	if (group_index < 0 || group_index >= HALO_PORT_MAXIMUM_DEVICE_GROUPS ||
 		!device_group_network_get(group_index, &entry->value, &flags, &runtime))
 	{
 		return FALSE;
@@ -829,7 +829,7 @@ static short device_group_entries(
 	struct device_datum *device;
 	short count = 0, group_index;
 
-	for (group_index = 0; group_index < scenario->device_groups.count && count < MAXIMUM_DEVICE_GROUPS; group_index++)
+	for (group_index = 0; group_index < scenario->device_groups.count && count < HALO_PORT_MAXIMUM_DEVICE_GROUPS; group_index++)
 	{
 		struct distributed_coop_device_group *entry = &entries[count];
 
@@ -849,7 +849,7 @@ static short device_group_entries(
 
 		groups[_device_group_role_power] = device->device.power_group_index;
 		groups[_device_group_role_position] = device->device.position_group_index;
-		for (role = 0; role < NUMBEROF(groups) && count < MAXIMUM_DEVICE_GROUPS; role++)
+		for (role = 0; role < NUMBEROF(groups) && count < HALO_PORT_MAXIMUM_DEVICE_GROUPS; role++)
 		{
 			struct distributed_coop_device_group *entry = &entries[count];
 			real value;
@@ -887,7 +887,7 @@ static short device_group_find(
 	{
 		group_index = entry->group_index;
 		return group_index >= 0 && group_index < global_scenario_get()->device_groups.count &&
-			group_index < MAXIMUM_DEVICE_GROUPS &&
+			group_index < HALO_PORT_MAXIMUM_DEVICE_GROUPS &&
 			device_group_network_get(group_index, &value, &flags, &runtime) && !runtime ? group_index : NONE;
 	}
 	device_index = object_find(entry->name_index, entry->object_index, entry->definition_index, _object_mask_device);
@@ -901,7 +901,7 @@ static short device_group_find(
 	default: return NONE;
 	}
 
-	return group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS &&
+	return group_index >= 0 && group_index < HALO_PORT_MAXIMUM_DEVICE_GROUPS &&
 		device_group_network_get(group_index, &value, &flags, &runtime) && runtime ? group_index : NONE;
 }
 
@@ -913,8 +913,9 @@ within a tick or two instead of after a pass through hundreds. */
 static void host_send_device_groups(
 	void)
 {
-	static short group_indices[MAXIMUM_DEVICE_GROUPS];
-	struct distributed_coop_device_group *entries = host_devices.message.groups;
+	static short group_indices[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
+	static struct distributed_coop_device_group all_entries[HALO_PORT_MAXIMUM_DEVICE_GROUPS];
+	struct distributed_coop_device_group *entries = all_entries;
 	short count = device_group_entries(entries, group_indices);
 	short moved_count = 0, moved_index = 0;
 	short index, sent = 0;
@@ -976,8 +977,7 @@ static void host_send_device_groups(
 	{
 		short message_count = (short)MIN(sent - index, MAXIMUM_DEVICE_GROUPS_PER_MESSAGE);
 
-		if (index > 0)
-			csmemcpy(entries, &entries[index], message_count * sizeof(entries[0]));
+		csmemcpy(host_devices.message.groups, &entries[index], message_count * sizeof(entries[0]));
 		send_to_clients(&host_devices.message, _distributed_message_coop_device_groups, message_count,
 			sizeof(entries[0]));
 	}
@@ -2702,7 +2702,7 @@ boolean network_coop_set_players_vitality(
 void network_coop_note_device_snap(
 	short group_index)
 {
-	if (coop_host() && group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS)
+	if (coop_host() && group_index >= 0 && group_index < HALO_PORT_MAXIMUM_DEVICE_GROUPS)
 		host_devices.snap_counts[group_index]++;
 }
 

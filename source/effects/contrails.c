@@ -408,7 +408,6 @@ void contrails_update(
 		struct contrail_datum *contrail = contrail_get(contrail_index);
 		struct contrail_definition *definition = contrail_definition_get(contrail->definition_index);
 		real frame_dt = dt - contrail->expired_dt;
-		real emit_dt = MAX(0.0f, point_dt - contrail->expired_dt);
 		real frames_per_second;
 		real frame_period;
 		real remaining_dt;
@@ -437,12 +436,12 @@ void contrails_update(
 
 			SET_FLAG(contrail->flags, _contrail_active_bit, active);
 
-			if (active && emit_dt > 0.0f)
+			if (active)
 			{
 				contrail_add_points(
 					contrail_index,
-					contrail_compute_new_point_count(contrail_index, emit_dt),
-					FALSE);
+					contrail_compute_new_point_count(contrail_index, point_dt),
+					TRUE);
 			}
 		}
 

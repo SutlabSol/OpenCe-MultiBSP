@@ -288,19 +288,13 @@ static void structure_culling_split_range(struct structure_culling_split_surface
 	ends[(*bucket_count)++] = first + count;
 }
 
-static boolean structure_culling_data_matches(struct structure_bsp const *structure)
+static boolean structure_culling_multi_bsp_match(struct structure_bsp const *structure)
 {
 	short i;
 
-	if (!structure)
+	if (!scenario_multi_bsp_active())
 	{
 		return FALSE;
-	}
-	if (structure_culling.allocation && structure_culling.structure == structure &&
-		structure_culling.surface_address == structure->surfaces.address &&
-		structure_culling.surface_count == structure->surfaces.count)
-	{
-		return TRUE;
 	}
 	for (i = 0; i < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++i)
 	{
@@ -313,11 +307,99 @@ static boolean structure_culling_data_matches(struct structure_bsp const *struct
 			return TRUE;
 		}
 	}
-	if (scenario_multi_bsp_active() && structure == global_structure_bsp_get())
+	if (structure == global_structure_bsp_get())
 	{
 		structure_culling_structure_bsp_loaded();
-		return structure_culling.allocation && structure_culling.structure == structure;
+		return structure_culling.allocation != NULL && structure_culling.structure == structure;
 	}
+	return FALSE;
+}
+
+static boolean structure_culling_multi_bsp_dispose(void)
+{
+	short i;
+
+	if (scenario_multi_bsp_active())
+	{
+		return TRUE;
+	}
+	for (i = 0; i < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++i)
+	{
+		if (structure_culling_slots[i].allocation)
+		{
+			if (structure_culling_slots[i].allocation == structure_culling.allocation)
+			{
+				structure_culling.allocation = NULL;
+			}
+			free(structure_culling_slots[i].allocation);
+		}
+		memset(&structure_culling_slots[i], 0, sizeof(structure_culling_slots[i]));
+	}
+	return FALSE;
+}
+
+static boolean structure_culling_multi_bsp_begin_load(struct structure_bsp const *structure)
+{
+	short slot;
+
+	if (!scenario_multi_bsp_active())
+	{
+		return FALSE;
+	}
+	for (slot = 0; slot < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++slot)
+	{
+		if (structure_culling_slots[slot].allocation &&
+			structure_culling_slots[slot].structure == structure &&
+			structure_culling_slots[slot].surface_address == structure->surfaces.address &&
+			structure_culling_slots[slot].surface_count == structure->surfaces.count)
+		{
+			structure_culling = structure_culling_slots[slot];
+			return TRUE;
+		}
+	}
+	memset(&structure_culling, 0, sizeof(structure_culling));
+	return FALSE;
+}
+
+static void structure_culling_multi_bsp_end_load(struct structure_bsp const *structure)
+{
+	short slot;
+	short target_slot = 0;
+
+	for (slot = 0; slot < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++slot)
+	{
+		if (structure_culling_slots[slot].structure == structure || !structure_culling_slots[slot].allocation)
+		{
+			target_slot = slot;
+			break;
+		}
+	}
+	if (structure_culling_slots[target_slot].allocation &&
+		structure_culling_slots[target_slot].allocation != structure_culling.allocation)
+	{
+		free(structure_culling_slots[target_slot].allocation);
+	}
+	structure_culling_slots[target_slot] = structure_culling;
+}
+
+static boolean structure_culling_data_matches(struct structure_bsp const *structure)
+{
+	if (!structure)
+	{
+		return FALSE;
+	}
+	if (structure_culling.allocation && structure_culling.structure == structure &&
+		structure_culling.surface_address == structure->surfaces.address &&
+		structure_culling.surface_count == structure->surfaces.count)
+	{
+		return TRUE;
+	}
+#ifndef global_structure_bsp_get
+	if (structure_culling_multi_bsp_match(structure))
+	{
+		return TRUE;
+	}
+#endif
 	return FALSE;
 }
 
@@ -868,24 +950,12 @@ long structure_culling_gather_pairings(long const *list, long list_count, boolea
 
 void structure_culling_dispose(void)
 {
-	short i;
-
-	if (scenario_multi_bsp_active())
+#ifndef global_structure_bsp_get
+	if (structure_culling_multi_bsp_dispose())
 	{
 		return;
 	}
-	for (i = 0; i < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++i)
-	{
-		if (structure_culling_slots[i].allocation)
-		{
-			if (structure_culling_slots[i].allocation == structure_culling.allocation)
-			{
-				structure_culling.allocation = NULL;
-			}
-			free(structure_culling_slots[i].allocation);
-		}
-		memset(&structure_culling_slots[i], 0, sizeof(structure_culling_slots[i]));
-	}
+#endif
 	/* debug_free rejects NULL, including before the first bsp load */
 	if (structure_culling.allocation)
 	{
@@ -1207,28 +1277,28 @@ void structure_culling_structure_bsp_loaded(void)
 	structure = global_structure_bsp_get();
 	if (!structure || !structure_bsp_port_verify(structure))
 	{
+#ifndef global_structure_bsp_get
+		if (!scenario_multi_bsp_active())
+		{
+			structure_culling_dispose();
+		}
+#else
+		structure_culling_dispose();
+#endif
 		return;
 	}
-	if (scenario_multi_bsp_active())
+#ifndef global_structure_bsp_get
+	if (structure_culling_multi_bsp_begin_load(structure))
 	{
-		short slot;
-		for (slot = 0; slot < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++slot)
-		{
-			if (structure_culling_slots[slot].allocation &&
-				structure_culling_slots[slot].structure == structure &&
-				structure_culling_slots[slot].surface_address == structure->surfaces.address &&
-				structure_culling_slots[slot].surface_count == structure->surfaces.count)
-			{
-				structure_culling = structure_culling_slots[slot];
-				return;
-			}
-		}
-		memset(&structure_culling, 0, sizeof(structure_culling));
+		return;
 	}
-	else
+	if (!scenario_multi_bsp_active())
 	{
 		structure_culling_dispose();
 	}
+#else
+	structure_culling_dispose();
+#endif
 	for (l = 0; l < structure->lightmaps.count; ++l)
 	{
 		long count = TAG_BLOCK_GET_ELEMENT(&structure->lightmaps, l, struct structure_lightmap)->materials.count;
@@ -1363,24 +1433,9 @@ void structure_culling_structure_bsp_loaded(void)
 	structure_culling.from_subclusters =
 		TAG_BLOCK_GET_ELEMENT(&structure->clusters, 0, struct structure_visibility_cluster)->subclusters.count != 0;
 	structure_culling.build_milliseconds = system_milliseconds() - started;
-	{
-		short slot;
-		short target_slot = 0;
-		for (slot = 0; slot < MAXIMUM_STRUCTURE_CULLING_SLOTS; ++slot)
-		{
-			if (structure_culling_slots[slot].structure == structure || !structure_culling_slots[slot].allocation)
-			{
-				target_slot = slot;
-				break;
-			}
-		}
-		if (structure_culling_slots[target_slot].allocation &&
-			structure_culling_slots[target_slot].allocation != structure_culling.allocation)
-		{
-			free(structure_culling_slots[target_slot].allocation);
-		}
-		structure_culling_slots[target_slot] = structure_culling;
-	}
+#ifndef global_structure_bsp_get
+	structure_culling_multi_bsp_end_load(structure);
+#endif
 	error(_error_silent,
 		"structure culling: %ld buckets (%s, %ld split) for %ld surfaces, %ld bytes, %lu ms, %ld of %ld triangles "
 		"disagree with their vertex normals",

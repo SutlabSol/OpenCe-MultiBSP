@@ -2250,6 +2250,7 @@ void encounter_create(
 			&global_scenario_get()->ai_encounters, DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index), struct encounter_definition);
 		boolean all_squads = desired_platoon_index == NONE && desired_squad_index == NONE;
 		short squad_index;
+#ifndef _error_silent
 		short previous_bsp = scenario_get_active_bsp_index();
 		short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
 
@@ -2262,6 +2263,7 @@ void encounter_create(
 		{
 			encounter_bsp = NONE;
 		}
+#endif
 
 		if (ai_debug.print_placement)
 		{
@@ -2379,10 +2381,12 @@ void encounter_create(
 			}
 		}
 
+#ifndef _error_silent
 		if (encounter_bsp != NONE)
 		{
 			scenario_set_active_bsp_context(previous_bsp);
 		}
+#endif
 		encounter_update_status(encounter_index);
 		encounters_test_activation();
 	}

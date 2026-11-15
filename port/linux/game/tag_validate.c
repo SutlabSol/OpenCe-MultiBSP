@@ -43,7 +43,6 @@ data and which the game takes as models (tag_schema_custom_edition_groups).
 
 #include "cseries.h"
 #include "cache/physical_memory_map.h"
-#include "structures/structure_bsp_definitions.h"
 #include "tag_schema.h"
 #include "mcc_tag_validate.h" /* MCC callbacks have an independent context. */
 
@@ -1826,26 +1825,7 @@ void tag_relocate_structure_bsp(
 
 	if (group && group->definition && bsp_header->base_address)
 	{
-		struct structure_bsp *bsp = (struct structure_bsp *)bsp_header->base_address;
-		long l, m;
-
-		relocate_schema_fields((byte *)bsp, group->definition, old_start, old_end, delta, 0);
-		relocate_pointer(&bsp->markers.address, old_start, old_end, delta);
-
-		for (l = 0; l < bsp->lightmaps.count && bsp->lightmaps.address; l++)
-		{
-			struct structure_lightmap *lightmap =
-				&((struct structure_lightmap *)bsp->lightmaps.address)[l];
-
-			for (m = 0; m < lightmap->materials.count && lightmap->materials.address; m++)
-			{
-				struct structure_material *material =
-					&((struct structure_material *)lightmap->materials.address)[m];
-
-				relocate_pointer(&material->vertices.hardware_format, old_start, old_end, delta);
-				relocate_pointer(&material->lightmap_vertices.hardware_format, old_start, old_end, delta);
-			}
-		}
+		relocate_schema_fields((byte *)bsp_header->base_address, group->definition, old_start, old_end, delta, 0);
 	}
 }
 

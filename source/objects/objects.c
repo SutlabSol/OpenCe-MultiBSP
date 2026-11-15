@@ -5731,11 +5731,14 @@ static void object_delete_recursive(
 		object_disconnect_from_map(object_index);
 	}
 	
+#ifndef unit_get
+	/* port: clear the deleted object's Multi-BSP residence slot */
 	{
 		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
 		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
 			object_bsp_index[abs_index] = NONE;
 	}
+#endif
 	object_type_delete(object_index);
 	object_header_delete(object_header_data, object_index);
 

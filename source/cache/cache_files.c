@@ -133,6 +133,7 @@ symbols in this file:
 #include "texture_cache.h"
 #include "interface/ui_widget.h"
 #include "scenario/scenario_definitions.h"
+#include "structures/structure_bsp_definitions.h"
 #include "sound/sound_manager.h"
 #include "tag_schema.h"
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
@@ -1742,6 +1743,42 @@ boolean scenario_structure_bsp_load(
 			resident_bsps[resident_slot].header = structure_bsp_header;
 			resident_bsps[resident_slot].contiguous = TRUE;
 			tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
+			if (structure_bsp_header->base_address)
+			{
+				struct structure_bsp *bsp = (struct structure_bsp *)structure_bsp_header->base_address;
+				byte const *old_start = (byte const *)reference->base_address;
+				byte const *old_end = old_start + reference->file_size;
+				ptrdiff_t delta = (byte const *)resident_alloc - old_start;
+				long l, m;
+
+				if ((byte const *)bsp->markers.address >= old_start && (byte const *)bsp->markers.address < old_end)
+					bsp->markers.address = (byte *)bsp->markers.address + delta;
+
+				for (l = 0; l < bsp->lightmaps.count && bsp->lightmaps.address; l++)
+				{
+					struct structure_lightmap *lightmap =
+						&((struct structure_lightmap *)bsp->lightmaps.address)[l];
+
+					for (m = 0; m < lightmap->materials.count && lightmap->materials.address; m++)
+					{
+						struct structure_material *material =
+							&((struct structure_material *)lightmap->materials.address)[m];
+
+						if ((byte const *)material->vertices.hardware_format >= old_start &&
+							(byte const *)material->vertices.hardware_format < old_end)
+						{
+							material->vertices.hardware_format =
+								(byte *)material->vertices.hardware_format + delta;
+						}
+						if ((byte const *)material->lightmap_vertices.hardware_format >= old_start &&
+							(byte const *)material->lightmap_vertices.hardware_format < old_end)
+						{
+							material->lightmap_vertices.hardware_format =
+								(byte *)material->lightmap_vertices.hardware_format + delta;
+						}
+					}
+				}
+			}
 		}
 	}
 
