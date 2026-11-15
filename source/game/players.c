@@ -511,6 +511,11 @@ struct players_globals *players_globals;
 struct data_array *team_data;
 struct data_array *player_data;
 static long machine_to_player_table[MAXIMUM_NETWORK_MACHINE_COUNT][MAXIMUM_LOCAL_PLAYERS] = { 0 };
+/* port: per-BSP precomputed combined PVS and player occupancy for Multi-BSP co-op */
+static unsigned long multi_bsp_combined_pvs[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO][16];
+static unsigned long multi_bsp_combined_pvs_local[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO][16];
+static boolean multi_bsp_has_players[MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO];
+static void players_update_multi_bsp_pvs(void);
 static boolean players_lost_map_started = FALSE;
 static short over_shield_screen_flash_fade_function = 0;
 static real over_shield_screen_flash_alpha = 0.f;
@@ -606,6 +611,9 @@ void players_initialize_for_new_map(
 	/* port: a new map has no network co-op checkpoint yet */
 	csmemset(&players_checkpoint, 0, sizeof(players_checkpoint));
 	csmemset(&players_coop_state, 0, sizeof(players_coop_state));
+	csmemset(multi_bsp_combined_pvs, 0, sizeof(multi_bsp_combined_pvs));
+	csmemset(multi_bsp_combined_pvs_local, 0, sizeof(multi_bsp_combined_pvs_local));
+	csmemset(multi_bsp_has_players, 0, sizeof(multi_bsp_has_players));
 	data_make_valid(player_data);
 	data_make_valid(team_data);
 	csmemset(
@@ -894,13 +902,50 @@ boolean players_are_all_dead(
 unsigned long const *players_get_combined_pvs_local(
 	void)
 {
+	if (scenario_multi_bsp_active())
+	{
+		short active_bsp = scenario_get_active_bsp_index();
+
+		if (active_bsp >= 0 &&
+			active_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+			scenario_bsp_index_is_loaded(active_bsp))
+		{
+			return multi_bsp_combined_pvs_local[active_bsp];
+		}
+	}
+
 	return players_globals->combined_pvs_local;
 }
 
 unsigned long const *players_get_combined_pvs(
 	void)
 {
+	if (scenario_multi_bsp_active())
+	{
+		short active_bsp = scenario_get_active_bsp_index();
+
+		if (active_bsp >= 0 &&
+			active_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO &&
+			scenario_bsp_index_is_loaded(active_bsp))
+		{
+			return multi_bsp_combined_pvs[active_bsp];
+		}
+	}
+
 	return players_globals->combined_pvs;
+}
+
+boolean players_any_player_in_bsp(
+	short bsp_index)
+{
+	if (!scenario_multi_bsp_active())
+		return bsp_index == NONE || bsp_index == global_structure_bsp_index;
+	if (bsp_index == NONE)
+		return TRUE;
+	if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+		return FALSE;
+
+	return multi_bsp_has_players[bsp_index];
 }
 
 void player_input_enable(
@@ -2016,6 +2061,164 @@ boolean players_compute_combined_pvs_for_bsp(
 	}
 
 	return any_player;
+}
+
+static void players_update_multi_bsp_pvs(
+	void)
+{
+	struct scenario *scenario = global_scenario_get();
+	short bsp_count;
+	short bsp_index;
+	boolean any_unit_alive = FALSE;
+
+	csmemset(multi_bsp_combined_pvs, 0, sizeof(multi_bsp_combined_pvs));
+	csmemset(multi_bsp_combined_pvs_local, 0, sizeof(multi_bsp_combined_pvs_local));
+	csmemset(multi_bsp_has_players, 0, sizeof(multi_bsp_has_players));
+
+	if (!scenario || !scenario_multi_bsp_active())
+		return;
+
+	bsp_count = (short)MIN(scenario->structure_bsp_references.count, MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
+	for (bsp_index = 0; bsp_index < bsp_count; bsp_index++)
+	{
+		struct structure_bsp *structure_bsp = scenario_structure_bsp_get_by_index(bsp_index);
+		struct data_iterator iterator;
+		struct player_datum *player;
+		short local_player_index;
+		boolean has_player = FALSE;
+
+		if (!structure_bsp)
+			continue;
+
+		data_iterator_new(&iterator, player_data);
+		while ((player = data_iterator_next(&iterator)) != NULL)
+		{
+			if (player->unit_index != NONE)
+			{
+				long root_object_index = object_get_ultimate_parent(player->unit_index);
+				struct object_datum *root_object = object_get(root_object_index);
+				short cluster_index = NONE;
+
+				any_unit_alive = TRUE;
+				if (object_get_bsp_index(root_object_index) == bsp_index)
+				{
+					cluster_index = root_object->object.location.cluster_index;
+					has_player = TRUE;
+				}
+				else
+				{
+					struct location overlap_location;
+
+					if (scenario_test_point_in_bsp(bsp_index, &root_object->object.bounding_sphere_center, &overlap_location))
+					{
+						cluster_index = overlap_location.cluster_index;
+						has_player = TRUE;
+					}
+				}
+
+				if (cluster_index != NONE &&
+					cluster_index >= 0 &&
+					cluster_index < structure_bsp->clusters.count)
+				{
+					unsigned long *cluster_pvs = structure_bsp_get_cluster_pvs(structure_bsp, cluster_index);
+
+					bit_vector_or(
+						(short)structure_bsp->clusters.count,
+						multi_bsp_combined_pvs[bsp_index],
+						cluster_pvs,
+						multi_bsp_combined_pvs[bsp_index]);
+					if (player->local_player_index != NONE)
+					{
+						bit_vector_or(
+							(short)structure_bsp->clusters.count,
+							multi_bsp_combined_pvs_local[bsp_index],
+							cluster_pvs,
+							multi_bsp_combined_pvs_local[bsp_index]);
+					}
+				}
+			}
+		}
+
+		for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+		{
+			if (local_player_exists(local_player_index))
+			{
+				struct observer_result const *camera = observer_get_camera(local_player_index);
+
+				if (camera)
+				{
+					struct location cam_location;
+					short cam_cluster = NONE;
+
+					if (scenario_test_point_in_bsp(bsp_index, &camera->position, &cam_location))
+					{
+						cam_cluster = cam_location.cluster_index;
+					}
+					else
+					{
+						real_point3d lookahead_pt;
+
+						point_from_line3d(&camera->position, &camera->forward, 2.5f, &lookahead_pt);
+						if (scenario_test_point_in_bsp(bsp_index, &lookahead_pt, &cam_location))
+						{
+							cam_cluster = cam_location.cluster_index;
+						}
+					}
+
+					if (cam_cluster != NONE &&
+						cam_cluster >= 0 &&
+						cam_cluster < structure_bsp->clusters.count)
+					{
+						unsigned long *cluster_pvs = structure_bsp_get_cluster_pvs(structure_bsp, cam_cluster);
+
+						bit_vector_or(
+							(short)structure_bsp->clusters.count,
+							multi_bsp_combined_pvs[bsp_index],
+							cluster_pvs,
+							multi_bsp_combined_pvs[bsp_index]);
+						bit_vector_or(
+							(short)structure_bsp->clusters.count,
+							multi_bsp_combined_pvs_local[bsp_index],
+							cluster_pvs,
+							multi_bsp_combined_pvs_local[bsp_index]);
+						has_player = TRUE;
+					}
+				}
+			}
+		}
+
+		if (bsp_index == global_structure_bsp_index)
+		{
+			short activating_cluster_index = objects_get_activating_cluster_index();
+
+			if (activating_cluster_index != NONE &&
+				activating_cluster_index >= 0 &&
+				activating_cluster_index < structure_bsp->clusters.count)
+			{
+				unsigned long *cluster_pvs = structure_bsp_get_cluster_pvs(structure_bsp, activating_cluster_index);
+
+				bit_vector_or(
+					(short)structure_bsp->clusters.count,
+					multi_bsp_combined_pvs[bsp_index],
+					cluster_pvs,
+					multi_bsp_combined_pvs[bsp_index]);
+				bit_vector_or(
+					(short)structure_bsp->clusters.count,
+					multi_bsp_combined_pvs_local[bsp_index],
+					cluster_pvs,
+					multi_bsp_combined_pvs_local[bsp_index]);
+			}
+		}
+
+		multi_bsp_has_players[bsp_index] = has_player;
+	}
+
+	if (!any_unit_alive &&
+		global_structure_bsp_index >= 0 &&
+		global_structure_bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
+	{
+		multi_bsp_has_players[global_structure_bsp_index] = TRUE;
+	}
 }
 
 static boolean player_handle_action(
@@ -3894,10 +4097,12 @@ void players_reconnect_to_structure_bsp(
 						}
 					}
 				}
+				player->cluster_index = root_object->object.location.cluster_index;
 			}
 		}
 		players_compute_combined_pvs(players_globals->combined_pvs_local, TRUE);
 		players_compute_combined_pvs(players_globals->combined_pvs, FALSE);
+		players_update_multi_bsp_pvs();
 		return;
 	}
 
@@ -5358,6 +5563,7 @@ void players_update_before_game(
 
 		players_compute_combined_pvs(players_globals->combined_pvs_local, TRUE);
 		players_compute_combined_pvs(players_globals->combined_pvs, FALSE);
+		players_update_multi_bsp_pvs();
 		players_globals->local_player_count = (short)players_compute_local_player_count();
 	}
 	else

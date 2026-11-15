@@ -4222,7 +4222,7 @@ static boolean object_update(
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
 	short prev_bsp = scenario_get_active_bsp_index();
-	short obj_bsp = object_get_bsp_index(object_index);
+	short obj_bsp = object_get_bsp_index(object_get_ultimate_parent(object_index));
 
 	boolean result = TRUE;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))

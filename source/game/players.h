@@ -420,6 +420,8 @@ unsigned long const *players_get_combined_pvs(
 boolean players_compute_combined_pvs_for_bsp(
 	short bsp_index,
 	unsigned long *combined_pvs);
+boolean players_any_player_in_bsp(
+	short bsp_index);
 
 void player_control_fix_for_loaded_game_state(void);
 

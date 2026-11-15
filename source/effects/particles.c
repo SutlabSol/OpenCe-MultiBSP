@@ -355,7 +355,10 @@ void particles_reconnect_to_structure_bsp(
 		}
 		else
 		{
-			scenario_location_from_point(&particle->location, position);
+			if (scenario_multi_bsp_active())
+				scenario_find_bsp_for_point(position, &particle->location);
+			else
+				scenario_location_from_point(&particle->location, position);
 			if (particle->location.cluster_index == NONE)
 			{
 				particle_delete(particle_index);

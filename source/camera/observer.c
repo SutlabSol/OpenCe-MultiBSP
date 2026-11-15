@@ -322,6 +322,7 @@ static short observer_parameter_derivative_real_counts[NUMBER_OF_OBSERVER_COMMAN
 };
 
 static struct observer_globals observer_globals;
+static short observer_camera_bsp[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 
 /* ---------- private code */
 
@@ -383,6 +384,7 @@ void observer_initialize_for_new_map(
 		local_player_index++)
 	{
 		observer_clear(observer_get(local_player_index));
+		observer_camera_bsp[local_player_index] = NONE;
 	}
 
 	return;
@@ -422,6 +424,23 @@ struct observer_result const *observer_get_camera(
 	}
 
 	return result;
+}
+
+short observer_get_camera_bsp(
+	short local_player_index)
+{
+	if (!scenario_multi_bsp_active())
+		return global_structure_bsp_index_get();
+
+	if (local_player_index >= 0 && local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
+	{
+		short bsp = observer_camera_bsp[local_player_index];
+
+		if (bsp != NONE && scenario_bsp_index_is_loaded(bsp))
+			return bsp;
+	}
+
+	return global_structure_bsp_index_get();
 }
 
 boolean observer_command_has_finished(
@@ -464,9 +483,35 @@ void observer_reconnect_to_structure_bsp(
 		{
 			struct observer *observer = observer_get(local_player_index);
 
-			scenario_location_from_point(
-				&observer->result.location,
-				&observer->result.position);
+			if (scenario_multi_bsp_active())
+			{
+				short bsp = NONE;
+				long player_index = local_player_get_player_index(local_player_index);
+
+				if (player_index != NONE)
+				{
+					struct player_datum *player = player_try_and_get(player_index);
+
+					if (player && player->unit_index != NONE)
+						bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
+				}
+				if (bsp != NONE && scenario_test_point_in_bsp(bsp, &observer->result.position, &observer->result.location))
+				{
+					observer_camera_bsp[local_player_index] = bsp;
+				}
+				else
+				{
+					bsp = scenario_find_bsp_for_point(&observer->result.position, &observer->result.location);
+					if (bsp != NONE)
+						observer_camera_bsp[local_player_index] = bsp;
+				}
+			}
+			else
+			{
+				scenario_location_from_point(
+					&observer->result.location,
+					&observer->result.position);
+			}
 		}
 	}
 
@@ -1370,6 +1415,7 @@ void observer_update(
 				}
 				if (observer_bsp != NONE && scenario_bsp_index_is_loaded(observer_bsp))
 				{
+					observer_camera_bsp[local_player_index] = observer_bsp;
 					scenario_set_active_bsp_context(observer_bsp);
 				}
 				observer_postcheck(local_player_index);

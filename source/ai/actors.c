@@ -4057,6 +4057,9 @@ void actors_handle_unit_effect(
 	unsigned long audible_clusters[BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_CLUSTERS_PER_STRUCTURE)];
 	real_point3d origin;
 	long owner_actor_index;
+	long ultimate_parent_index = object_get_ultimate_parent(unit_index);
+	short previous_bsp = scenario_get_active_bsp_index();
+	short unit_bsp = NONE;
 
 	if (unit->unit.swarm_actor_index != NONE)
 	{
@@ -4069,9 +4072,20 @@ void actors_handle_unit_effect(
 
 	if (unit->object.parent_object_index != NONE)
 	{
-		long ultimate_parent_index = object_get_ultimate_parent(unit_index);
-
 		location = &object_get(ultimate_parent_index)->object.location;
+	}
+
+	if (scenario_multi_bsp_active())
+	{
+		unit_bsp = object_get_bsp_index(ultimate_parent_index);
+		if (unit_bsp != NONE && scenario_bsp_index_is_loaded(unit_bsp))
+		{
+			scenario_set_active_bsp_context(unit_bsp);
+		}
+		else
+		{
+			unit_bsp = NONE;
+		}
 	}
 
 	structure_bsp = global_structure_bsp_get();
@@ -4104,6 +4118,16 @@ void actors_handle_unit_effect(
 	actor_iterator_new(&iterator, TRUE);
 	while ((actor = actor_iterator_next(&iterator)) != NULL)
 	{
+		if (scenario_multi_bsp_active() && unit_bsp != NONE)
+		{
+			long check_unit_index = actor->meta.swarm ? actor->meta.swarm_unit_index : actor->meta.unit_index;
+			if (check_unit_index != NONE && object_try_and_get(check_unit_index))
+			{
+				if (object_get_bsp_index(object_get_ultimate_parent(check_unit_index)) != unit_bsp)
+					continue;
+			}
+		}
+
 		if (iterator.index != owner_actor_index &&
 			actor->input.position.body_location.cluster_index != NONE &&
 			actor->input.position.body_location.cluster_index >= 0 &&
@@ -4136,6 +4160,11 @@ void actors_handle_unit_effect(
 				}
 			}
 		}
+	}
+
+	if (unit_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
 	}
 
 	return;
@@ -4233,6 +4262,18 @@ static void actor_update(
 		}
 		if (actor_bsp != NONE && scenario_bsp_index_is_loaded(actor_bsp))
 		{
+			boolean force_active = actor->meta.force_active || ai_debug.force_all_active;
+			if (!force_active && actor->meta.encounter_index != NONE)
+			{
+				struct encounter_datum *encounter = encounter_get(actor->meta.encounter_index);
+				if (encounter && encounter->force_active)
+					force_active = TRUE;
+			}
+			/* port: only run AI actor updates in BSPs that currently contain at least one player (unless force_active) */
+			if (!force_active && !players_any_player_in_bsp(actor_bsp))
+			{
+				return;
+			}
 			scenario_set_active_bsp_context(actor_bsp);
 		}
 		else

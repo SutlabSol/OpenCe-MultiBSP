@@ -610,6 +610,7 @@ effect_marker_list_get_markers_by_name (January's own name for this static is un
 static struct effect_marker_list const *global_effect_marker_list;
 
 static struct profile_section effects_update_section = {"effects_update", NONE, TRUE};
+static short effect_bsp_index[HALO_PORT_MAXIMUM_EFFECTS];
 
 /* ---------- public code */
 
@@ -631,6 +632,7 @@ void effects_initialize_for_new_map(
 {
 	data_make_valid(effect_data);
 	data_make_valid(effect_location_data);
+	csmemset(effect_bsp_index, NONE, sizeof(effect_bsp_index));
 
 	return;
 }
@@ -787,6 +789,17 @@ long effect_new_attached_from_markers(
 		impulse_effect_initialize(effect, scale_a, scale_b, color, impulse_field);
 
 		effect->object_index = object_index;
+		if (scenario_multi_bsp_active())
+		{
+			short bsp = object_get_bsp_index(object_get_ultimate_parent(object_index));
+			if (bsp == NONE && marker_points)
+				bsp = scenario_find_bsp_for_point(marker_points, NULL);
+			effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] = bsp;
+		}
+		else
+		{
+			effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] = NONE;
+		}
 
 		if (effects_corpse_nonviolent &&
 			effects_object_is_corpse(effect->object_index))
@@ -893,7 +906,49 @@ long effect_new_unattached_from_markers(
 		marker_list.node_index = NONE;
 		marker_list.node_matrix = NULL;
 
-		scenario_location_from_point(&effect->location, marker_points);
+		if (scenario_multi_bsp_active())
+		{
+			short bsp = NONE;
+			short owner_bsp = NONE;
+
+			effect->location.cluster_index = NONE;
+			if (owner_object_index != NONE && object_try_and_get(owner_object_index))
+			{
+				owner_bsp = object_get_bsp_index(object_get_ultimate_parent(owner_object_index));
+				if (owner_bsp != NONE && scenario_test_point_in_bsp(owner_bsp, marker_points, &effect->location))
+					bsp = owner_bsp;
+			}
+			if (bsp == NONE)
+			{
+				bsp = scenario_find_bsp_for_point(marker_points, &effect->location);
+			}
+			if (bsp == NONE && marker_forwards)
+			{
+				real_point3d probe_point;
+
+				point_from_line3d(marker_points, marker_forwards, 0.1f, &probe_point);
+				bsp = scenario_find_bsp_for_point(&probe_point, &effect->location);
+				if (bsp == NONE)
+				{
+					point_from_line3d(marker_points, marker_forwards, -0.1f, &probe_point);
+					bsp = scenario_find_bsp_for_point(&probe_point, &effect->location);
+				}
+			}
+			if (bsp == NONE && owner_bsp != NONE && scenario_bsp_index_is_loaded(owner_bsp))
+			{
+				struct object_datum *owner_root = object_get(object_get_ultimate_parent(owner_object_index));
+
+				bsp = owner_bsp;
+				if (owner_root->object.location.cluster_index != NONE)
+					effect->location = owner_root->object.location;
+			}
+			effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] = bsp;
+		}
+		else
+		{
+			effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] = NONE;
+			scenario_location_from_point(&effect->location, marker_points);
+		}
 
 		effect->velocity = translational_velocity
 			? *translational_velocity
@@ -947,6 +1002,8 @@ long effect_new_from_object(
 		impulse_effect_initialize(effect, scale_a, scale_b, color, impulse_field);
 
 		effect->object_index = object_index;
+		effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] =
+			scenario_multi_bsp_active() ? object_get_bsp_index(object_get_ultimate_parent(object_index)) : NONE;
 		effect->local_player_index =
 			first_person_weapon_get_local_index(object_index);
 
@@ -1009,6 +1066,8 @@ long effect_new_looping(
 		struct effect_datum *effect = effect_get(effect_index);
 
 		effect->object_index = object_index;
+		effect_bsp_index[DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index)] =
+			scenario_multi_bsp_active() ? object_get_bsp_index(object_get_ultimate_parent(object_index)) : NONE;
 		effect->local_player_index =
 			first_person_weapon_get_local_index(object_index);
 		effect->scale_a_function_index = scale_a_function_index;
@@ -2229,6 +2288,28 @@ static void effect_update(
 		effect_definition_get(effect->definition_index);
 	boolean visible;
 	short iteration_index;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short effect_bsp = NONE;
+	long effect_abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(effect_index);
+
+	if (scenario_multi_bsp_active() && VALID_INDEX(effect_abs_index, HALO_PORT_MAXIMUM_EFFECTS))
+	{
+		if (effect->object_index != NONE && object_try_and_get(effect->object_index))
+		{
+			short obj_bsp = object_get_bsp_index(object_get_ultimate_parent(effect->object_index));
+			if (obj_bsp != NONE)
+				effect_bsp_index[effect_abs_index] = obj_bsp;
+		}
+		effect_bsp = effect_bsp_index[effect_abs_index];
+		if (effect_bsp != NONE && scenario_bsp_index_is_loaded(effect_bsp))
+		{
+			scenario_set_active_bsp_context(effect_bsp);
+		}
+		else
+		{
+			effect_bsp = NONE;
+		}
+	}
 
 	if (effect->object_index != NONE)
 	{
@@ -2240,6 +2321,8 @@ static void effect_update(
 		if (!object)
 		{
 			effect_delete(effect_index);
+			if (effect_bsp != NONE)
+				scenario_set_active_bsp_context(previous_bsp);
 
 			return;
 		}
@@ -2290,6 +2373,8 @@ static void effect_update(
 					}
 
 					effect_delete(effect_index);
+					if (effect_bsp != NONE)
+						scenario_set_active_bsp_context(previous_bsp);
 
 					return;
 				}
@@ -2358,6 +2443,8 @@ static void effect_update(
 			else
 			{
 				effect_delete(effect_index);
+				if (effect_bsp != NONE)
+					scenario_set_active_bsp_context(previous_bsp);
 
 				return;
 			}
@@ -2438,6 +2525,9 @@ static void effect_update(
 				else
 					effect_delete(effect_index);
 
+				if (effect_bsp != NONE)
+					scenario_set_active_bsp_context(previous_bsp);
+
 				return;
 			}
 
@@ -2504,6 +2594,9 @@ static void effect_update(
 				effect_generate_parts(effect);
 		}
 	}
+
+	if (effect_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 
 	return;
 }

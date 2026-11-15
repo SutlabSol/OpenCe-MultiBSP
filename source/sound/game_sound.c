@@ -475,6 +475,10 @@ long unattached_impulse_sound_new(
 		scale>=0.f && scale<=1.f);
 
 	source.location = *location;
+	if (scenario_multi_bsp_active() && source.location.game_location.cluster_index == NONE)
+	{
+		scenario_find_bsp_for_point(&source.location.position, &source.location.game_location);
+	}
 	source.scale = scale;
 	source.spatialization_mode = _sound_spatialization_mode_absolute;
 	source.gain = 1.f;
@@ -825,6 +829,17 @@ void game_sound_update(
 	boolean crossed_water_boundary;
 	long looping_sound_index;
 	struct location location;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short camera_bsp = NONE;
+
+	if (scenario_multi_bsp_active())
+	{
+		camera_bsp = observer_get_camera_bsp(0);
+		if (camera_bsp != NONE && scenario_bsp_index_is_loaded(camera_bsp))
+			scenario_set_active_bsp_context(camera_bsp);
+		else
+			camera_bsp = NONE;
+	}
 
 	scenario_get_sound_environment(
 		&background_sound_definition_index,
@@ -892,6 +907,19 @@ void game_sound_update(
 			if (TEST_FLAG(object->object.flags, _object_connected_to_map_bit))
 			{
 				object_get_location(sound->object_index, &location);
+				if (scenario_multi_bsp_active())
+				{
+					short obj_bsp = object_get_bsp_index(object_get_ultimate_parent(sound->object_index));
+					if (obj_bsp != NONE && obj_bsp != scenario_get_active_bsp_index())
+					{
+						struct observer_result const *cam = observer_get_camera(0);
+						if (cam && distance_squared3d(&cam->position, &object->object.bounding_sphere_center) <= 900.f)
+						{
+							update_potentially_audible_looping_sound(looping_sound_index, &location);
+						}
+						continue;
+					}
+				}
 				if (location_potentially_audible(&location))
 				{
 					update_potentially_audible_looping_sound(looping_sound_index, &location);
@@ -899,6 +927,9 @@ void game_sound_update(
 			}
 		}
 	}
+
+	if (camera_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 
 	game_sound_globals->update_index++;
 
@@ -983,60 +1014,126 @@ void compute_sound_obstruction(
 		887,
 		source->spatialization_mode==_sound_spatialization_mode_absolute);
 
-	if (source->location.game_location.cluster_index != NONE &&
-		camera->location.cluster_index != NONE &&
-		source->location.game_location.cluster_index >= 0 &&
-		source->location.game_location.cluster_index < global_structure_bsp_get()->clusters.count &&
-		camera->location.cluster_index >= 0 &&
-		camera->location.cluster_index < global_structure_bsp_get()->clusters.count)
 	{
-		struct structure_bsp *structure_bsp = global_structure_bsp_get();
-		byte encoded_distance = structure_bsp_get_cluster_encoded_sound_distance(
-			structure_bsp,
-			camera->location.cluster_index,
-			source->location.game_location.cluster_index);
-		real cluster_distance = (encoded_distance & ~FLAG(_cluster_sound_distance_unreachable_bit))
-			* (MAXIMUM_CLUSTER_SOUND_DISTANCE / CLUSTER_SOUND_DISTANCE_VALUE_MASK);
+		short previous_bsp = scenario_get_active_bsp_index();
+		short listener_bsp = NONE;
+		short cam_cluster = camera->location.cluster_index;
+		short src_cluster = source->location.game_location.cluster_index;
 
-		if (cluster_distance < MAXIMUM_CLUSTER_SOUND_DISTANCE)
+		if (scenario_multi_bsp_active())
 		{
-			if (BIT_VECTOR_TEST_FLAG(
-				structure_bsp_get_cluster_pvs(
-					global_structure_bsp_get(),
-					camera->location.cluster_index),
-				source->location.game_location.cluster_index))
-			{
-				real_vector3d listener_to_source;
-				struct collision_result collision;
+			struct location loc;
 
-				source->obstruction = 0.45f;
-				vector_from_points3d(
-					&camera->position,
-					&source->location.position,
-					&listener_to_source);
-				if (!collision_test_vector(
-					FLAG(_collision_test_front_facing_surfaces_bit) |
-						FLAG(_collision_test_structure_bit) |
-						FLAG(_collision_test_media_bit) |
-						FLAG(_collision_test_objects_bit) |
-						FLAG(_collision_test_objects_scenery_bit) |
-						FLAG(_collision_test_objects_machines_bit),
-					&camera->position,
-					&listener_to_source,
-					NONE,
-					&collision))
+			listener_bsp = observer_get_camera_bsp(local_player_index);
+			if (listener_bsp == NONE || !scenario_bsp_index_is_loaded(listener_bsp))
+			{
+				listener_bsp = scenario_find_bsp_for_point(&camera->position, &loc);
+			}
+			if (listener_bsp != NONE && scenario_bsp_index_is_loaded(listener_bsp))
+			{
+				scenario_set_active_bsp_context(listener_bsp);
+				if (scenario_test_point_in_bsp(listener_bsp, &camera->position, &loc) && loc.cluster_index != NONE)
 				{
-					source->obstruction = 0.0f;
-					source->occlusion = 0.0f;
+					cam_cluster = loc.cluster_index;
+				}
+				else
+				{
+					long player_index = local_player_get_player_index(local_player_index);
+					if (player_index != NONE && player_get(player_index)->unit_index != NONE)
+					{
+						long root_index = object_get_ultimate_parent(player_get(player_index)->unit_index);
+						struct object_datum *root_obj = object_get(root_index);
+						if (object_get_bsp_index(root_index) == listener_bsp &&
+							root_obj->object.location.cluster_index != NONE)
+						{
+							cam_cluster = root_obj->object.location.cluster_index;
+						}
+					}
+				}
+
+				if (scenario_test_point_in_bsp(listener_bsp, &source->location.position, &loc) && loc.cluster_index != NONE)
+				{
+					src_cluster = loc.cluster_index;
+				}
+				else
+				{
+					short found_src_bsp = scenario_find_bsp_for_point(&source->location.position, &loc);
+					if (found_src_bsp != NONE && found_src_bsp != listener_bsp)
+					{
+						src_cluster = NONE;
+						source->obstruction = 0.0f;
+						source->occlusion = 0.0f;
+					}
+					else if (src_cluster == NONE || src_cluster < 0 || src_cluster >= global_structure_bsp_get()->clusters.count)
+					{
+						src_cluster = cam_cluster;
+					}
 				}
 			}
-
-			if (source->obstruction != 0.0f)
+			else
 			{
-				source->occlusion = 1.0f - distance / (cluster_distance + distance);
-				source->occlusion = PIN(source->occlusion * 1.4f, 0.0f, 1.0f);
+				listener_bsp = NONE;
 			}
 		}
+
+		if (src_cluster != NONE &&
+			cam_cluster != NONE &&
+			src_cluster >= 0 &&
+			src_cluster < global_structure_bsp_get()->clusters.count &&
+			cam_cluster >= 0 &&
+			cam_cluster < global_structure_bsp_get()->clusters.count)
+		{
+			struct structure_bsp *structure_bsp = global_structure_bsp_get();
+			byte encoded_distance = structure_bsp_get_cluster_encoded_sound_distance(
+				structure_bsp,
+				cam_cluster,
+				src_cluster);
+			real cluster_distance = (encoded_distance & ~FLAG(_cluster_sound_distance_unreachable_bit))
+				* (MAXIMUM_CLUSTER_SOUND_DISTANCE / CLUSTER_SOUND_DISTANCE_VALUE_MASK);
+
+			if (cluster_distance < MAXIMUM_CLUSTER_SOUND_DISTANCE)
+			{
+				if (BIT_VECTOR_TEST_FLAG(
+					structure_bsp_get_cluster_pvs(
+						global_structure_bsp_get(),
+						cam_cluster),
+					src_cluster))
+				{
+					real_vector3d listener_to_source;
+					struct collision_result collision;
+
+					source->obstruction = 0.45f;
+					vector_from_points3d(
+						&camera->position,
+						&source->location.position,
+						&listener_to_source);
+					if (!collision_test_vector(
+						FLAG(_collision_test_front_facing_surfaces_bit) |
+							FLAG(_collision_test_structure_bit) |
+							FLAG(_collision_test_media_bit) |
+							FLAG(_collision_test_objects_bit) |
+							FLAG(_collision_test_objects_scenery_bit) |
+							FLAG(_collision_test_objects_machines_bit),
+						&camera->position,
+						&listener_to_source,
+						NONE,
+						&collision))
+					{
+						source->obstruction = 0.0f;
+						source->occlusion = 0.0f;
+					}
+				}
+
+				if (source->obstruction != 0.0f)
+				{
+					source->occlusion = 1.0f - distance / (cluster_distance + distance);
+					source->occlusion = PIN(source->occlusion * 1.4f, 0.0f, 1.0f);
+				}
+			}
+		}
+
+		if (listener_bsp != NONE)
+			scenario_set_active_bsp_context(previous_bsp);
 	}
 
 	match_assert(
@@ -1074,10 +1171,20 @@ static void compute_combined_pas(
 		if (local_player_get_player_index(local_player_index) != NONE)
 		{
 			struct observer_result const *camera = observer_get_camera(local_player_index);
+			short cam_cluster = camera->location.cluster_index;
 
-			if (camera->location.cluster_index != NONE &&
-				camera->location.cluster_index >= 0 &&
-				camera->location.cluster_index < structure_bsp->clusters.count)
+			if (scenario_multi_bsp_active())
+			{
+				struct location cam_loc;
+				short active_bsp = scenario_get_active_bsp_index();
+
+				if (scenario_test_point_in_bsp(active_bsp, &camera->position, &cam_loc) && cam_loc.cluster_index != NONE)
+					cam_cluster = cam_loc.cluster_index;
+			}
+
+			if (cam_cluster != NONE &&
+				cam_cluster >= 0 &&
+				cam_cluster < structure_bsp->clusters.count)
 			{
 				short cluster_index;
 
@@ -1088,7 +1195,7 @@ static void compute_combined_pas(
 					real distance = (structure_bsp_get_cluster_encoded_sound_distance(
 							structure_bsp,
 							cluster_index,
-							camera->location.cluster_index) & ~FLAG(_cluster_sound_distance_unreachable_bit))
+							cam_cluster) & ~FLAG(_cluster_sound_distance_unreachable_bit))
 						* (MAXIMUM_CLUSTER_SOUND_DISTANCE / CLUSTER_SOUND_DISTANCE_VALUE_MASK);
 
 					if (distance < MAXIMUM_CLUSTER_SOUND_DISTANCE)

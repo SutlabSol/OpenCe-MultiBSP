@@ -682,7 +682,9 @@ void encounter_compute_activation_cluster_bit_vector(
 
 				/* port: guard cluster_index against structure_bsp cluster count in Multi-BSP mode */
 				if (cluster_index != NONE &&
-					(!scenario_multi_bsp_active() || (cluster_index >= 0 && cluster_index < structure_bsp->clusters.count)))
+					(!scenario_multi_bsp_active() ||
+						(object_get_bsp_index(ultimate_parent_index) == scenario_get_active_bsp_index() &&
+							cluster_index >= 0 && cluster_index < structure_bsp->clusters.count)))
 				{
 					match_assert(
 						"c:\\halo\\SOURCE\\ai\\encounters.c",
@@ -708,7 +710,9 @@ void encounter_compute_activation_cluster_bit_vector(
 			cluster_index = parent_object->object.location.cluster_index;
 			/* port: guard cluster_index against structure_bsp cluster count in Multi-BSP mode */
 			if (cluster_index != NONE &&
-				(!scenario_multi_bsp_active() || (cluster_index >= 0 && cluster_index < structure_bsp->clusters.count)))
+				(!scenario_multi_bsp_active() ||
+					(object_get_bsp_index(ultimate_parent_index) == scenario_get_active_bsp_index() &&
+						cluster_index >= 0 && cluster_index < structure_bsp->clusters.count)))
 			{
 				match_assert(
 					"c:\\halo\\SOURCE\\ai\\encounters.c",
@@ -758,8 +762,14 @@ void encounter_compute_activation_cluster_bit_vector(
 				{
 					struct prop_datum *prop = prop_get(actor->target.target_prop_index);
 					short cluster_index = prop->body_location.cluster_index;
+					boolean same_bsp = TRUE;
 
-					if (cluster_index != NONE &&
+					if (scenario_multi_bsp_active() && prop->unit_index != NONE && object_try_and_get(prop->unit_index))
+					{
+						same_bsp = (object_get_bsp_index(object_get_ultimate_parent(prop->unit_index)) == scenario_get_active_bsp_index());
+					}
+
+					if (cluster_index != NONE && same_bsp &&
 						(!scenario_multi_bsp_active() || (cluster_index >= 0 && cluster_index < structure_bsp->clusters.count)))
 					{
 						match_assert(
@@ -2365,6 +2375,14 @@ void encounters_update(
 				encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
 				if (encounter_bsp != NONE && scenario_bsp_index_is_loaded(encounter_bsp))
 				{
+					if (!players_any_player_in_bsp(encounter_bsp) &&
+						!encounter->active &&
+						!encounter->force_active &&
+						encounter->respawn_delay_ticks == 0 &&
+						!ai_debug.force_all_active)
+					{
+						continue;
+					}
 					scenario_set_active_bsp_context(encounter_bsp);
 				}
 				else
@@ -4152,14 +4170,41 @@ static void encounters_test_activation(
 			long ultimate_parent_index = object_get_ultimate_parent(actor->meta.unit_index);
 			struct object_datum *parent_object = object_get(ultimate_parent_index);
 			short cluster_index = parent_object->object.location.cluster_index;
+			short actor_bsp = object_get_bsp_index(ultimate_parent_index);
 
-			if (cluster_index == NONE ||
+			if (scenario_multi_bsp_active() && actor_bsp != NONE && scenario_bsp_index_is_loaded(actor_bsp))
+			{
+				if (!players_any_player_in_bsp(actor_bsp))
+				{
+					actor->meta.dormant_desire = TRUE;
+				}
+				else
+				{
+					short previous_bsp = scenario_get_active_bsp_index();
+					struct structure_bsp *actor_structure_bsp = scenario_structure_bsp_get_by_index(actor_bsp);
+					unsigned long const *actor_pvs;
+
+					scenario_set_active_bsp_context(actor_bsp);
+					actor_pvs = players_get_combined_pvs();
+					if (actor_structure_bsp &&
+						cluster_index != NONE &&
+						cluster_index >= 0 &&
+						cluster_index < actor_structure_bsp->clusters.count)
+					{
+						actor->meta.dormant_desire = !BIT_VECTOR_TEST_FLAG(actor_pvs, cluster_index);
+					}
+					else
+					{
+						actor->meta.dormant_desire = FALSE;
+					}
+					scenario_set_active_bsp_context(previous_bsp);
+				}
+			}
+			else if (cluster_index == NONE ||
 				cluster_index < 0 ||
 				cluster_index >= structure_bsp->clusters.count)
 			{
-				/* port: in Multi-BSP mode, keep encounterless actors awake if their BSP is loaded */
-				actor->meta.dormant_desire = !(scenario_multi_bsp_active() &&
-					scenario_bsp_index_is_loaded(object_get_bsp_index(ultimate_parent_index)));
+				actor->meta.dormant_desire = TRUE;
 			}
 			else
 			{
@@ -4198,41 +4243,50 @@ static void encounters_test_activation(
 		active |= encounter->respawn_delay_ticks > 0;
 		active |= ai_debug.force_all_active;
 
-		if (encounter_definition->runtime_structure_bsp_reference_index == NONE ||
-			encounter_definition->runtime_structure_bsp_reference_index == global_structure_bsp_index)
+		if (!scenario_multi_bsp_active() &&
+			(encounter_definition->runtime_structure_bsp_reference_index == NONE ||
+				encounter_definition->runtime_structure_bsp_reference_index == global_structure_bsp_index))
 		{
 			encounter_compute_activation_cluster_bit_vector(iterator.datum_index, TRUE, MAXIMUM_CLUSTERS_PER_STRUCTURE, combined_pvs, activation_cluster_bit_vector);
 			active |= bit_vector_and(structure_bsp->clusters.count, combined_pvs, activation_cluster_bit_vector, NULL);
 		}
-		/* port: in Multi-BSP mode, test encounter activation against players in that encounter's BSP */
+		/* port: in Multi-BSP mode, only activate encounters in BSPs that currently have at least one player */
 		else if (scenario_multi_bsp_active() &&
-			scenario_bsp_index_is_loaded(encounter_definition->runtime_structure_bsp_reference_index))
+			(encounter_definition->runtime_structure_bsp_reference_index == NONE ||
+				scenario_bsp_index_is_loaded(encounter_definition->runtime_structure_bsp_reference_index)))
 		{
-			unsigned long bsp_pvs[BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_CLUSTERS_PER_STRUCTURE)];
 			short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
-			boolean has_players_in_bsp = players_compute_combined_pvs_for_bsp(encounter_bsp, bsp_pvs);
+			if (encounter_bsp == NONE)
+				encounter_bsp = global_structure_bsp_index;
 
-			if (has_players_in_bsp || encounter->active || active)
+			if (scenario_bsp_index_is_loaded(encounter_bsp))
 			{
-				short previous_bsp = scenario_get_active_bsp_index();
-				struct structure_bsp *encounter_structure_bsp = scenario_structure_bsp_get_by_index(encounter_bsp);
+				boolean has_players_in_bsp = players_any_player_in_bsp(encounter_bsp);
 
-				scenario_set_active_bsp_context(encounter_bsp);
-				encounter_compute_activation_cluster_bit_vector(
-					iterator.datum_index,
-					TRUE,
-					MAXIMUM_CLUSTERS_PER_STRUCTURE,
-					bsp_pvs,
-					activation_cluster_bit_vector);
-				if (has_players_in_bsp && encounter_structure_bsp)
+				if (has_players_in_bsp || encounter->active || active)
 				{
-					active |= bit_vector_and(
-						encounter_structure_bsp->clusters.count,
-						bsp_pvs,
-						activation_cluster_bit_vector,
-						NULL);
+					short previous_bsp = scenario_get_active_bsp_index();
+					struct structure_bsp *encounter_structure_bsp = scenario_structure_bsp_get_by_index(encounter_bsp);
+					unsigned long const *bsp_pvs;
+
+					scenario_set_active_bsp_context(encounter_bsp);
+					bsp_pvs = players_get_combined_pvs();
+					encounter_compute_activation_cluster_bit_vector(
+						iterator.datum_index,
+						TRUE,
+						MAXIMUM_CLUSTERS_PER_STRUCTURE,
+						has_players_in_bsp ? bsp_pvs : NULL,
+						activation_cluster_bit_vector);
+					if (has_players_in_bsp && encounter_structure_bsp)
+					{
+						active |= bit_vector_and(
+							encounter_structure_bsp->clusters.count,
+							bsp_pvs,
+							activation_cluster_bit_vector,
+							NULL);
+					}
+					scenario_set_active_bsp_context(previous_bsp);
 				}
-				scenario_set_active_bsp_context(previous_bsp);
 			}
 		}
 		else

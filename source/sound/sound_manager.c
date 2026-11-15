@@ -918,9 +918,18 @@ void sound_reconnect_to_structure_bsp(
 			if (sound->source.spatialization_mode ==
 				_sound_spatialization_mode_absolute)
 			{
-				scenario_location_from_point(
-					&sound->source.location.game_location,
-					&sound->source.location.position);
+				if (scenario_multi_bsp_active())
+				{
+					scenario_find_bsp_for_point(
+						&sound->source.location.position,
+						&sound->source.location.game_location);
+				}
+				else
+				{
+					scenario_location_from_point(
+						&sound->source.location.game_location,
+						&sound->source.location.position);
+				}
 			}
 
 			sound_index = data_next_index(sound_data, sound_index);
@@ -4248,10 +4257,25 @@ static void refresh_listener(
 				0x4EF,
 				camera);
 			listener->valid = TRUE;
-			underwater = scenario_location_underwater(
-				&camera->location,
-				&camera->position,
-				NULL);
+			if (scenario_multi_bsp_active())
+			{
+				short prev_bsp = scenario_get_active_bsp_index();
+				short cam_bsp = observer_get_camera_bsp(local_player_index);
+				if (cam_bsp != NONE && scenario_bsp_index_is_loaded(cam_bsp))
+					scenario_set_active_bsp_context(cam_bsp);
+				underwater = scenario_location_underwater(
+					&camera->location,
+					&camera->position,
+					NULL);
+				scenario_set_active_bsp_context(prev_bsp);
+			}
+			else
+			{
+				underwater = scenario_location_underwater(
+					&camera->location,
+					&camera->position,
+					NULL);
+			}
 
 			if (listener->underwater != underwater)
 			{
