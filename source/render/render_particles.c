@@ -246,6 +246,7 @@ void render_particles(
 					}
 					else
 					{
+						/* port: stop adding sprite groups once group_particle_counts is full */
 						if (group_count >= MAXIMUM_RENDERED_PARTICLE_GROUPS)
 							break;
 

@@ -2358,153 +2358,150 @@ static boolean player_teleport_internal(
 	/* port: where the unit was, for a network co-op teleport that would leave
 	it on a loading zone (below) */
 	real_point3d original_position = biped->object.position;
+	/* port: in multi-BSP mode, bind the target BSP context during teleport collision checks */
+	short previous_bsp = scenario_get_active_bsp_index();
+	short target_bsp = NONE;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\game\\players.c",
 		0x4FB,
 		source_unit_index==NONE || local_player_count()>1 || game_connection()!=_game_connection_local);
-	/* port: in Multi-BSP mode, bind the target BSP context during teleport collision checks */
+	if (scenario_multi_bsp_active())
 	{
-		short previous_bsp = scenario_get_active_bsp_index();
-		short target_bsp = NONE;
-
-		if (scenario_multi_bsp_active())
+		if (source_unit_index != NONE && object_try_and_get(source_unit_index))
 		{
-			if (source_unit_index != NONE && object_try_and_get(source_unit_index))
-			{
-				target_bsp = object_get_bsp_index(object_get_ultimate_parent(source_unit_index));
-			}
-			if (target_bsp == NONE && position)
-			{
-				target_bsp = scenario_find_bsp_for_point(position, NULL);
-			}
-			if (target_bsp != NONE && scenario_bsp_index_is_loaded(target_bsp))
-			{
-				scenario_set_active_bsp_context(target_bsp);
-			}
-			else
-			{
-				target_bsp = NONE;
-			}
+			target_bsp = object_get_bsp_index(object_get_ultimate_parent(source_unit_index));
 		}
-
-		if (source_unit_index != NONE &&
-			object_get_ultimate_parent(source_unit_index) != source_unit_index)
+		if (target_bsp == NONE && position)
 		{
-			long source_root_object_index = object_get_ultimate_parent(source_unit_index);
-			struct object_datum *source_root_object;
-			real_vector3d best_adjustment_vector;
-			real collision_radius;
-			real_matrix4x3 adjustment_matrix;
-			real scale;
-			short adjustment_index;
-			real_point3d anchor_point;
-
-			unit_get(source_unit_index);
-			source_root_object = object_get(source_root_object_index);
-			best_adjustment_vector = source_root_object->object.translational_velocity;
-			best_adjustment_vector.k = 0.f;
-			source_unit_index = source_root_object_index;
-			if (!(magnitude_squared3d(&best_adjustment_vector) > 0.f))
-			{
-				if (source_root_object->object.forward.k < 0.70710677f)
-				{
-					best_adjustment_vector = source_root_object->object.forward;
-				}
-				else
-				{
-					best_adjustment_vector = source_root_object->object.up;
-				}
-			}
-			best_adjustment_vector.k = 0.f;
-
-			collision_radius = biped_definition_get(biped->definition_index)->biped.collision_radius;
-			scale = collision_radius * 3.f + source_root_object->object.bounding_sphere_radius;
-			match_assert(
-				"c:\\halo\\SOURCE\\game\\players.c",
-				0x525,
-				magnitude3d(&best_adjustment_vector));
-			match_assert(
-				"c:\\halo\\SOURCE\\game\\players.c",
-				0x526,
-				scale);
-
-			negate_vector3d(
-				&best_adjustment_vector,
-				&best_adjustment_vector);
-			normalize3d(&best_adjustment_vector);
-			matrix4x3_from_point_and_vectors(
-				&adjustment_matrix,
-				&source_root_object->object.bounding_sphere_center,
-				&best_adjustment_vector,
-				global_up3d);
-			adjustment_matrix.scale = scale;
-
-			for (adjustment_index = 0;
-				adjustment_index < NUMBEROF(adjustment_weights) && !result;
-				adjustment_index++)
-			{
-				matrix4x3_transform_point(
-					&adjustment_matrix,
-					&adjustment_weights[adjustment_index],
-					&anchor_point);
-				result = biped_fix_position(
-					player_unit_index,
-					source_unit_index,
-					&anchor_point,
-					NULL,
-					2.f,
-					FALSE,
-					FALSE,
-					TRUE);
-
-				if (!result)
-				{
-					short random_adjustment_index;
-					real_point3d new_position;
-					real_vector3d random_offset;
-
-					for (random_adjustment_index = 0;
-						random_adjustment_index < 8 && !result;
-						random_adjustment_index++)
-					{
-						random_offset = *global_zero_vector3d;
-						random_direction3d(&random_offset);
-						point_from_line3d(
-							&anchor_point,
-							&random_offset,
-							collision_radius,
-							&new_position);
-						result = biped_fix_position(
-							player_unit_index,
-							source_unit_index,
-							&new_position,
-							NULL,
-							2.f,
-							FALSE,
-							FALSE,
-							TRUE);
-					}
-				}
-			}
+			target_bsp = scenario_find_bsp_for_point(position, NULL);
+		}
+		if (target_bsp != NONE && scenario_bsp_index_is_loaded(target_bsp))
+		{
+			scenario_set_active_bsp_context(target_bsp);
 		}
 		else
 		{
+			target_bsp = NONE;
+		}
+	}
+
+	if (source_unit_index != NONE &&
+		object_get_ultimate_parent(source_unit_index) != source_unit_index)
+	{
+		long source_root_object_index = object_get_ultimate_parent(source_unit_index);
+		struct object_datum *source_root_object;
+		real_vector3d best_adjustment_vector;
+		real collision_radius;
+		real_matrix4x3 adjustment_matrix;
+		real scale;
+		short adjustment_index;
+		real_point3d anchor_point;
+
+		unit_get(source_unit_index);
+		source_root_object = object_get(source_root_object_index);
+		best_adjustment_vector = source_root_object->object.translational_velocity;
+		best_adjustment_vector.k = 0.f;
+		source_unit_index = source_root_object_index;
+		if (!(magnitude_squared3d(&best_adjustment_vector) > 0.f))
+		{
+			if (source_root_object->object.forward.k < 0.70710677f)
+			{
+				best_adjustment_vector = source_root_object->object.forward;
+			}
+			else
+			{
+				best_adjustment_vector = source_root_object->object.up;
+			}
+		}
+		best_adjustment_vector.k = 0.f;
+
+		collision_radius = biped_definition_get(biped->definition_index)->biped.collision_radius;
+		scale = collision_radius * 3.f + source_root_object->object.bounding_sphere_radius;
+		match_assert(
+			"c:\\halo\\SOURCE\\game\\players.c",
+			0x525,
+			magnitude3d(&best_adjustment_vector));
+		match_assert(
+			"c:\\halo\\SOURCE\\game\\players.c",
+			0x526,
+			scale);
+
+		negate_vector3d(
+			&best_adjustment_vector,
+			&best_adjustment_vector);
+		normalize3d(&best_adjustment_vector);
+		matrix4x3_from_point_and_vectors(
+			&adjustment_matrix,
+			&source_root_object->object.bounding_sphere_center,
+			&best_adjustment_vector,
+			global_up3d);
+		adjustment_matrix.scale = scale;
+
+		for (adjustment_index = 0;
+			adjustment_index < NUMBEROF(adjustment_weights) && !result;
+			adjustment_index++)
+		{
+			matrix4x3_transform_point(
+				&adjustment_matrix,
+				&adjustment_weights[adjustment_index],
+				&anchor_point);
 			result = biped_fix_position(
 				player_unit_index,
 				source_unit_index,
-				(real_point3d *)position,
+				&anchor_point,
 				NULL,
 				2.f,
 				FALSE,
 				FALSE,
 				TRUE);
-		}
 
-		if (target_bsp != NONE)
-		{
-			scenario_set_active_bsp_context(previous_bsp);
+			if (!result)
+			{
+				short random_adjustment_index;
+				real_point3d new_position;
+				real_vector3d random_offset;
+
+				for (random_adjustment_index = 0;
+					random_adjustment_index < 8 && !result;
+					random_adjustment_index++)
+				{
+					random_offset = *global_zero_vector3d;
+					random_direction3d(&random_offset);
+					point_from_line3d(
+						&anchor_point,
+						&random_offset,
+						collision_radius,
+						&new_position);
+					result = biped_fix_position(
+						player_unit_index,
+						source_unit_index,
+						&new_position,
+						NULL,
+						2.f,
+						FALSE,
+						FALSE,
+						TRUE);
+				}
+			}
 		}
+	}
+	else
+	{
+		result = biped_fix_position(
+			player_unit_index,
+			source_unit_index,
+			(real_point3d *)position,
+			NULL,
+			2.f,
+			FALSE,
+			FALSE,
+			TRUE);
+	}
+
+	if (target_bsp != NONE)
+	{
+		scenario_set_active_bsp_context(previous_bsp);
 	}
 
 	player->cluster_index = NONE;

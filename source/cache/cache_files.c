@@ -300,6 +300,159 @@ static struct resident_bsp_entry *resident_bsp_find(
 
 	return NULL;
 }
+
+static long resident_bsp_find_free_slot(
+	void)
+{
+	long i;
+
+	for (i = 0; i < NUMBEROF(resident_bsps); i++)
+	{
+		if (!resident_bsps[i].allocation)
+			return i;
+	}
+
+	return NONE;
+}
+
+static void resident_bsp_free_slot(
+	long slot)
+{
+	if (slot != NONE && resident_bsps[slot].allocation)
+	{
+		if (resident_bsps[slot].contiguous)
+			XPhysicalFree(resident_bsps[slot].allocation);
+		else
+			system_free(resident_bsps[slot].allocation);
+		resident_bsps[slot].allocation = NULL;
+		resident_bsps[slot].header = NULL;
+		resident_bsps[slot].tag_index = NONE;
+		resident_bsps[slot].size = 0;
+		resident_bsps[slot].contiguous = FALSE;
+	}
+}
+
+static void resident_bsp_unload_all(
+	void)
+{
+	long i;
+
+	if (custom_edition_cache_tags_loaded())
+		custom_edition_structure_bsp_unload();
+	if (mcc_cache_tags_loaded())
+		mcc_cache_bsp_unload();
+
+	for (i = 0; i < NUMBEROF(resident_bsps); i++)
+	{
+		if (resident_bsps[i].allocation)
+		{
+#ifdef HALO_ANDROID
+			if (resident_bsps[i].header)
+			{
+				struct cache_file_structure_bsp_header *bsp = resident_bsps[i].header;
+
+				xgpu_static_buffers_remove(bsp->vertex_buffers, bsp->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+				xgpu_static_buffers_remove(bsp->index_buffers, bsp->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+				xgpu_static_range_remove(resident_bsps[i].allocation, 1);
+			}
+#endif
+			if (resident_bsps[i].header && !mcc_cache_tags_loaded())
+				structure_bsp_header_deregister_vertex_buffers(resident_bsps[i].header);
+			resident_bsp_free_slot(i);
+		}
+	}
+	cache_file_globals.structure_bsp_header = NULL;
+}
+
+static long resident_bsp_store_mcc(
+	struct scenario_structure_bsp_reference *reference,
+	void **mcc_header,
+	void **mcc_structure)
+{
+	long slot = resident_bsp_find_free_slot();
+	void *resident_alloc = NULL;
+	boolean contiguous = FALSE;
+
+	if (slot != NONE)
+	{
+		resident_alloc = system_malloc((size_t)reference->file_size);
+		if (!resident_alloc)
+		{
+			resident_alloc = XPhysicalAlloc((unsigned long)reference->file_size, (unsigned long)-1, 0, PAGE_READWRITE);
+			contiguous = resident_alloc != NULL;
+		}
+	}
+	if (resident_alloc)
+	{
+		csmemcpy(resident_alloc, *mcc_header, (size_t)reference->file_size);
+		resident_bsps[slot].tag_index = reference->structure_bsp.index;
+		resident_bsps[slot].allocation = resident_alloc;
+		resident_bsps[slot].size = reference->file_size;
+		resident_bsps[slot].header = (struct cache_file_structure_bsp_header *)resident_alloc;
+		resident_bsps[slot].contiguous = contiguous;
+		tag_relocate_structure_bsp(*mcc_header, reference->file_size, resident_alloc);
+		mcc_cache_bsp_relocate(*mcc_header, reference->file_size, resident_alloc);
+		*mcc_header = resident_alloc;
+		*mcc_structure = ((struct cache_file_structure_bsp_header *)resident_alloc)->base_address;
+	}
+
+	return slot;
+}
+
+static long resident_bsp_store_retail(
+	struct scenario_structure_bsp_reference *reference,
+	struct cache_file_structure_bsp_header **structure_bsp_header)
+{
+	long slot = resident_bsp_find_free_slot();
+	void *resident_alloc = slot != NONE ?
+		XPhysicalAlloc((unsigned long)reference->file_size, (unsigned long)-1, 0, PAGE_READWRITE) : NULL;
+
+	if (resident_alloc)
+	{
+		csmemcpy(resident_alloc, reference->base_address, (size_t)reference->file_size);
+		*structure_bsp_header = (struct cache_file_structure_bsp_header *)resident_alloc;
+		resident_bsps[slot].tag_index = reference->structure_bsp.index;
+		resident_bsps[slot].allocation = resident_alloc;
+		resident_bsps[slot].size = reference->file_size;
+		resident_bsps[slot].header = *structure_bsp_header;
+		resident_bsps[slot].contiguous = TRUE;
+		tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
+		if ((*structure_bsp_header)->base_address)
+		{
+			struct structure_bsp *bsp = (struct structure_bsp *)(*structure_bsp_header)->base_address;
+			byte const *old_start = (byte const *)reference->base_address;
+			byte const *old_end = old_start + reference->file_size;
+			ptrdiff_t delta = (byte const *)resident_alloc - old_start;
+			long l, m;
+
+			if ((byte const *)bsp->markers.address >= old_start && (byte const *)bsp->markers.address < old_end)
+				bsp->markers.address = (byte *)bsp->markers.address + delta;
+
+			for (l = 0; l < bsp->lightmaps.count && bsp->lightmaps.address; l++)
+			{
+				struct structure_lightmap *lightmap = &((struct structure_lightmap *)bsp->lightmaps.address)[l];
+
+				for (m = 0; m < lightmap->materials.count && lightmap->materials.address; m++)
+				{
+					struct structure_material *material = &((struct structure_material *)lightmap->materials.address)[m];
+
+					if ((byte const *)material->vertices.hardware_format >= old_start &&
+						(byte const *)material->vertices.hardware_format < old_end)
+					{
+						material->vertices.hardware_format = (byte *)material->vertices.hardware_format + delta;
+					}
+					if ((byte const *)material->lightmap_vertices.hardware_format >= old_start &&
+						(byte const *)material->lightmap_vertices.hardware_format < old_end)
+					{
+						material->lightmap_vertices.hardware_format = (byte *)material->lightmap_vertices.hardware_format + delta;
+					}
+				}
+			}
+		}
+	}
+
+	return slot;
+}
 static char const *data_00316820[] =
 {
 	"d:\\maps_de\\",
@@ -686,43 +839,7 @@ void scenario_tags_unload(
 	}
 	cache_file_close();
 	/* port: release any resident multi-BSP allocations before unloading tags */
-	{
-		long i;
-
-		if (custom_edition_cache_tags_loaded())
-			custom_edition_structure_bsp_unload();
-		if (mcc_cache_tags_loaded())
-			mcc_cache_bsp_unload();
-
-		for (i = 0; i < NUMBEROF(resident_bsps); i++)
-		{
-			if (resident_bsps[i].allocation)
-			{
-#ifdef HALO_ANDROID
-				if (resident_bsps[i].header)
-				{
-					struct cache_file_structure_bsp_header *bsp = resident_bsps[i].header;
-
-					xgpu_static_buffers_remove(bsp->vertex_buffers, bsp->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
-					xgpu_static_buffers_remove(bsp->index_buffers, bsp->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
-					xgpu_static_range_remove(resident_bsps[i].allocation, 1);
-				}
-#endif
-				if (resident_bsps[i].header && !mcc_cache_tags_loaded())
-					structure_bsp_header_deregister_vertex_buffers(resident_bsps[i].header);
-				if (resident_bsps[i].contiguous)
-					XPhysicalFree(resident_bsps[i].allocation);
-				else
-					system_free(resident_bsps[i].allocation);
-				resident_bsps[i].allocation = NULL;
-				resident_bsps[i].header = NULL;
-				resident_bsps[i].tag_index = NONE;
-				resident_bsps[i].size = 0;
-				resident_bsps[i].contiguous = FALSE;
-			}
-		}
-		cache_file_globals.structure_bsp_header = NULL;
-	}
+	resident_bsp_unload_all();
 	/* port: an MCC map's tags and buffers are its own (mcc_cache.c) */
 	if (mcc_cache_tags_loaded())
 	{
@@ -1567,51 +1684,12 @@ boolean scenario_structure_bsp_load(
 	if (mcc_cache_tags_loaded())
 	{
 		void *mcc_header, *mcc_structure;
-		long i;
-		void *resident_alloc = NULL;
-		boolean contiguous = FALSE;
 
 		if (!cache_file_structure_bsp_tag_valid(reference) ||
 			!mcc_cache_bsp_load(reference, &mcc_header, &mcc_structure))
 			return FALSE;
 
-		for (i = 0; i < NUMBEROF(resident_bsps); i++)
-		{
-			if (!resident_bsps[i].allocation)
-			{
-				resident_slot = i;
-				break;
-			}
-		}
-		if (resident_slot != NONE)
-		{
-			resident_alloc = system_malloc((size_t)reference->file_size);
-			contiguous = FALSE;
-			if (!resident_alloc)
-			{
-				resident_alloc = XPhysicalAlloc(
-					(unsigned long)reference->file_size,
-					(unsigned long)-1,
-					0,
-					PAGE_READWRITE);
-				if (resident_alloc)
-					contiguous = TRUE;
-			}
-		}
-		if (resident_alloc)
-		{
-			csmemcpy(resident_alloc, mcc_header, (size_t)reference->file_size);
-			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
-			resident_bsps[resident_slot].allocation = resident_alloc;
-			resident_bsps[resident_slot].size = reference->file_size;
-			resident_bsps[resident_slot].header = (struct cache_file_structure_bsp_header *)resident_alloc;
-			resident_bsps[resident_slot].contiguous = contiguous;
-			tag_relocate_structure_bsp(mcc_header, reference->file_size, resident_alloc);
-			mcc_cache_bsp_relocate(mcc_header, reference->file_size, resident_alloc);
-			mcc_header = resident_alloc;
-			mcc_structure = ((struct cache_file_structure_bsp_header *)resident_alloc)->base_address;
-		}
-
+		resident_slot = resident_bsp_store_mcc(reference, &mcc_header, &mcc_structure);
 		cache_file_globals.structure_bsp_header = mcc_header;
 		cache_get_tag_instance(reference->structure_bsp.index)->base_address = mcc_structure;
 		return TRUE;
@@ -1713,92 +1791,14 @@ boolean scenario_structure_bsp_load(
 
 	/* port: relocate the validated structure BSP into a dedicated contiguous allocation
 	so multiple BSPs can remain resident simultaneously without overwriting each other */
-	{
-		long i;
-		void *resident_alloc = NULL;
-
-		for (i = 0; i < NUMBEROF(resident_bsps); i++)
-		{
-			if (!resident_bsps[i].allocation)
-			{
-				resident_slot = i;
-				break;
-			}
-		}
-		if (resident_slot != NONE)
-		{
-			resident_alloc = XPhysicalAlloc(
-				(unsigned long)reference->file_size,
-				(unsigned long)-1,
-				0,
-				PAGE_READWRITE);
-		}
-		if (resident_alloc)
-		{
-			csmemcpy(resident_alloc, reference->base_address, (size_t)reference->file_size);
-			structure_bsp_header = (struct cache_file_structure_bsp_header *)resident_alloc;
-			resident_bsps[resident_slot].tag_index = reference->structure_bsp.index;
-			resident_bsps[resident_slot].allocation = resident_alloc;
-			resident_bsps[resident_slot].size = reference->file_size;
-			resident_bsps[resident_slot].header = structure_bsp_header;
-			resident_bsps[resident_slot].contiguous = TRUE;
-			tag_relocate_structure_bsp(reference->base_address, reference->file_size, resident_alloc);
-			if (structure_bsp_header->base_address)
-			{
-				struct structure_bsp *bsp = (struct structure_bsp *)structure_bsp_header->base_address;
-				byte const *old_start = (byte const *)reference->base_address;
-				byte const *old_end = old_start + reference->file_size;
-				ptrdiff_t delta = (byte const *)resident_alloc - old_start;
-				long l, m;
-
-				if ((byte const *)bsp->markers.address >= old_start && (byte const *)bsp->markers.address < old_end)
-					bsp->markers.address = (byte *)bsp->markers.address + delta;
-
-				for (l = 0; l < bsp->lightmaps.count && bsp->lightmaps.address; l++)
-				{
-					struct structure_lightmap *lightmap =
-						&((struct structure_lightmap *)bsp->lightmaps.address)[l];
-
-					for (m = 0; m < lightmap->materials.count && lightmap->materials.address; m++)
-					{
-						struct structure_material *material =
-							&((struct structure_material *)lightmap->materials.address)[m];
-
-						if ((byte const *)material->vertices.hardware_format >= old_start &&
-							(byte const *)material->vertices.hardware_format < old_end)
-						{
-							material->vertices.hardware_format =
-								(byte *)material->vertices.hardware_format + delta;
-						}
-						if ((byte const *)material->lightmap_vertices.hardware_format >= old_start &&
-							(byte const *)material->lightmap_vertices.hardware_format < old_end)
-						{
-							material->lightmap_vertices.hardware_format =
-								(byte *)material->lightmap_vertices.hardware_format + delta;
-						}
-					}
-				}
-			}
-		}
-	}
+	resident_slot = resident_bsp_store_retail(reference, &structure_bsp_header);
 
 	/* port: a Halo Custom Edition bsp has no Xbox vertex buffers: its
 	materials' vertices, as checked, are compressed and given buffers
 	(port/linux/game/custom_edition_geometry.c) */
 	if (custom_edition_cache_tags_loaded() && !custom_edition_structure_bsp_load(structure_bsp_header->base_address))
 	{
-		if (resident_slot != NONE && resident_bsps[resident_slot].allocation)
-		{
-			if (resident_bsps[resident_slot].contiguous)
-				XPhysicalFree(resident_bsps[resident_slot].allocation);
-			else
-				system_free(resident_bsps[resident_slot].allocation);
-			resident_bsps[resident_slot].allocation = NULL;
-			resident_bsps[resident_slot].header = NULL;
-			resident_bsps[resident_slot].tag_index = NONE;
-			resident_bsps[resident_slot].size = 0;
-			resident_bsps[resident_slot].contiguous = FALSE;
-		}
+		resident_bsp_free_slot(resident_slot);
 		return FALSE;
 	}
 

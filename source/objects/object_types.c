@@ -1048,158 +1048,153 @@ void object_types_disconnect_from_structure_bsp(
 	return;
 }
 
-static void object_types_place_objects_for_bsp(
-	short bsp_index,
-	boolean reconnecting)
-{
-	short object_type;
-	struct scenario *scenario = global_scenario_get();
-
-	if (bsp_index < 0 || bsp_index >= MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO)
-		return;
-	if (scenario_multi_bsp_active() && TEST_FLAG(processed_bsp_flags, bsp_index))
-		return;
-
-	for (object_type = 0; object_type < NUMBER_OF_OBJECT_TYPES; object_type++)
-	{
-		struct object_type_definition *definition;
-
-		if (!TEST_FLAG(_object_mask_remove_on_bsp_switch, object_type))
-		{
-			continue;
-		}
-
-		definition = object_type_definition_get(object_type);
-		if (definition->placement_tag_block_offset!=NONE &&
-			definition->palette_tag_block_offset!=NONE)
-		{
-			long element_size;
-			struct tag_block *scenario_datums = scenario_get_object_type_scenario_datums(
-				scenario,
-				object_type,
-				&element_size);
-			struct tag_block *scenario_palette = scenario_get_object_type_scenario_palette(
-				scenario,
-				object_type);
-
-			if (!TEST_FLAG(processed_bsp_flags, bsp_index))
-			{
-				short scenario_datum_index;
-
-				/* port: no more than the short counter reaches (a map's count;
-				retail has up to 1523) */
-				for (scenario_datum_index = 0;
-					scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
-					scenario_datum_index++)
-				{
-					struct scenario_object_datum *scenario_object =
-						(struct scenario_object_datum *)tag_block_get_element_with_size(
-							scenario_datums,
-							scenario_datum_index,
-							element_size);
-
-					if (processed_bsp_flags == 0)
-					{
-						scenario_object->on_bsp_flags = 0;
-					}
-
-					/* port: a palette entry the scenario has, naming a tag (a
-					map's index; object_new_from_scenario makes nothing from
-					any other) */
-					if (VALID_INDEX(scenario_object->palette_entry_index, scenario_palette->count) &&
-						TAG_BLOCK_GET_ELEMENT(
-							scenario_palette,
-							scenario_object->palette_entry_index,
-							struct scenario_object_palette_entry)->reference.index!=NONE)
-					{
-						struct scenario_object_palette_entry *palette_entry = TAG_BLOCK_GET_ELEMENT(
-							scenario_palette,
-							scenario_object->palette_entry_index,
-							struct scenario_object_palette_entry);
-						struct object_definition *object_definition = object_definition_get(
-							palette_entry->reference.index);
-						real_matrix4x3 matrix;
-						real_point3d transformed_bounding_offset;
-
-						matrix4x3_rotation_from_angles(
-							&matrix,
-							scenario_object->rotation.yaw,
-							scenario_object->rotation.pitch,
-							scenario_object->rotation.roll);
-						matrix.position = scenario_object->position;
-						matrix4x3_transform_point(
-							&matrix,
-							&object_definition->object.bounding_offset,
-							&transformed_bounding_offset);
-
-						if (bsp3d_test_point(global_bsp3d_get(), 0, &scenario_object->position)==NONE &&
-							bsp3d_test_point(global_bsp3d_get(), 0, &transformed_bounding_offset)==NONE)
-						{
-							scenario_object->on_bsp_flags &= ~FLAG(bsp_index);
-						}
-						else
-						{
-							scenario_object->on_bsp_flags |= FLAG(bsp_index);
-						}
-					}
-				}
-			}
-
-			if (reconnecting)
-			{
-				short scenario_datum_index;
-
-				objects_memory_compact();
-				/* port: no more than the short counter reaches (a map's count) */
-				for (scenario_datum_index = 0;
-					scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
-					scenario_datum_index++)
-				{
-					struct scenario_object_datum *scenario_object =
-						(struct scenario_object_datum *)tag_block_get_element_with_size(
-							scenario_datums,
-							scenario_datum_index,
-							element_size);
-
-					if ((scenario_object->name_index==NONE ||
-						object_index_from_name_index(scenario_object->name_index)==NONE) &&
-						!TEST_FLAG(scenario_object->placement_flags, _scenario_object_placement_not_automatic_bit) &&
-						TEST_FLAG(scenario_object->on_bsp_flags, bsp_index) &&
-						(!scenario_multi_bsp_active() || (scenario_object->on_bsp_flags & processed_bsp_flags) == 0))
-					{
-						object_new_from_scenario(scenario_object, scenario_palette);
-						objects_garbage_collection();
-					}
-				}
-			}
-		}
-	}
-
-	processed_bsp_flags |= FLAG(bsp_index);
-}
-
 void object_types_place_objects(
 	boolean reconnecting)
 {
 	if (!game_in_editor() && global_structure_bsp_index!=NONE)
 	{
+		short object_type;
+		struct scenario *scenario = global_scenario_get();
+
+		/* port: in multi-BSP mode, objects stay connected across BSP switches so each BSP is placed once */
+		if (scenario_multi_bsp_active() && TEST_FLAG(processed_bsp_flags, global_structure_bsp_index))
+			return;
+
+		for (object_type = 0; object_type < NUMBER_OF_OBJECT_TYPES; object_type++)
+		{
+			struct object_type_definition *definition;
+
+			if (!TEST_FLAG(_object_mask_remove_on_bsp_switch, object_type))
+			{
+				continue;
+			}
+
+			definition = object_type_definition_get(object_type);
+			if (definition->placement_tag_block_offset!=NONE &&
+				definition->palette_tag_block_offset!=NONE)
+			{
+				long element_size;
+				struct tag_block *scenario_datums = scenario_get_object_type_scenario_datums(
+					scenario,
+					object_type,
+					&element_size);
+				struct tag_block *scenario_palette = scenario_get_object_type_scenario_palette(
+					scenario,
+					object_type);
+
+				if (!TEST_FLAG(processed_bsp_flags, global_structure_bsp_index))
+				{
+					short scenario_datum_index;
+
+					/* port: no more than the short counter reaches (a map's count;
+					retail has up to 1523) */
+					for (scenario_datum_index = 0;
+						scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
+						scenario_datum_index++)
+					{
+						struct scenario_object_datum *scenario_object =
+							(struct scenario_object_datum *)tag_block_get_element_with_size(
+								scenario_datums,
+								scenario_datum_index,
+								element_size);
+
+						if (processed_bsp_flags == 0)
+						{
+							scenario_object->on_bsp_flags = 0;
+						}
+
+						/* port: a palette entry the scenario has, naming a tag (a
+						map's index; object_new_from_scenario makes nothing from
+						any other) */
+						if (VALID_INDEX(scenario_object->palette_entry_index, scenario_palette->count) &&
+							TAG_BLOCK_GET_ELEMENT(
+								scenario_palette,
+								scenario_object->palette_entry_index,
+								struct scenario_object_palette_entry)->reference.index!=NONE)
+						{
+							struct scenario_object_palette_entry *palette_entry = TAG_BLOCK_GET_ELEMENT(
+								scenario_palette,
+								scenario_object->palette_entry_index,
+								struct scenario_object_palette_entry);
+							struct object_definition *object_definition = object_definition_get(
+								palette_entry->reference.index);
+							real_matrix4x3 matrix;
+							real_point3d transformed_bounding_offset;
+
+							matrix4x3_rotation_from_angles(
+								&matrix,
+								scenario_object->rotation.yaw,
+								scenario_object->rotation.pitch,
+								scenario_object->rotation.roll);
+							matrix.position = scenario_object->position;
+							matrix4x3_transform_point(
+								&matrix,
+								&object_definition->object.bounding_offset,
+								&transformed_bounding_offset);
+
+							if (bsp3d_test_point(global_bsp3d_get(), 0, &scenario_object->position)==NONE &&
+								bsp3d_test_point(global_bsp3d_get(), 0, &transformed_bounding_offset)==NONE)
+							{
+								scenario_object->on_bsp_flags &= ~FLAG(global_structure_bsp_index);
+							}
+							else
+							{
+								scenario_object->on_bsp_flags |= FLAG(global_structure_bsp_index);
+							}
+						}
+					}
+				}
+
+				if (reconnecting)
+				{
+					short scenario_datum_index;
+
+					objects_memory_compact();
+					/* port: no more than the short counter reaches (a map's count) */
+					for (scenario_datum_index = 0;
+						scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
+						scenario_datum_index++)
+					{
+						struct scenario_object_datum *scenario_object =
+							(struct scenario_object_datum *)tag_block_get_element_with_size(
+								scenario_datums,
+								scenario_datum_index,
+								element_size);
+
+						if ((scenario_object->name_index==NONE ||
+							object_index_from_name_index(scenario_object->name_index)==NONE) &&
+							!TEST_FLAG(scenario_object->placement_flags, _scenario_object_placement_not_automatic_bit) &&
+							TEST_FLAG(scenario_object->on_bsp_flags, global_structure_bsp_index) &&
+							/* port: avoid placing boundary-spanning unnamed objects a second time in multi-BSP mode */
+							(!scenario_multi_bsp_active() || (scenario_object->on_bsp_flags & processed_bsp_flags) == 0))
+						{
+							object_new_from_scenario(scenario_object, scenario_palette);
+							objects_garbage_collection();
+						}
+					}
+				}
+			}
+		}
+
+		processed_bsp_flags |= FLAG(global_structure_bsp_index);
+
+		/* port: in multi-BSP mode, place scenario objects for all other resident BSPs */
 		if (scenario_multi_bsp_active())
 		{
+			short primary_bsp = global_structure_bsp_index;
 			short bsp_index;
 
 			for (bsp_index = 0; bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO; bsp_index++)
 			{
-				if (scenario_bsp_index_is_loaded(bsp_index))
+				if (scenario_bsp_index_is_loaded(bsp_index) && !TEST_FLAG(processed_bsp_flags, bsp_index))
 				{
+					global_structure_bsp_index = bsp_index;
 					scenario_set_active_bsp_context(bsp_index);
-					object_types_place_objects_for_bsp(bsp_index, reconnecting);
+					object_types_place_objects(reconnecting);
 				}
 			}
+			global_structure_bsp_index = primary_bsp;
 			scenario_restore_primary_bsp_context();
-		}
-		else
-		{
-			object_types_place_objects_for_bsp(global_structure_bsp_index, reconnecting);
 		}
 	}
 

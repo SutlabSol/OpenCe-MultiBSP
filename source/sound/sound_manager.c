@@ -4257,6 +4257,7 @@ static void refresh_listener(
 				0x4EF,
 				camera);
 			listener->valid = TRUE;
+			/* port: in multi-BSP mode, check underwater status in the listener camera's BSP context */
 			if (scenario_multi_bsp_active())
 			{
 				short prev_bsp = scenario_get_active_bsp_index();

@@ -763,6 +763,7 @@ void weather_particle_systems_render(
 			system->location.cluster_index = render.cluster_index;
 			system->location.leaf_index = render.leaf_index;
 			system->under_water = scenario_location_underwater(&system->location, &render.camera.position, &system->weather_palette_index);
+			/* port: guard weather_palette_index against the active BSP's weather_palette count in multi-BSP mode */
 			if (system->weather_palette_index!=NONE &&
 				VALID_INDEX(system->weather_palette_index, global_structure_bsp_get()->weather_palette.count))
 			{

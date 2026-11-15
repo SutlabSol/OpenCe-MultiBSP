@@ -236,6 +236,7 @@ byte structure_bsp_get_cluster_encoded_sound_distance(
 {
 	byte result;
 
+	/* port: guard cluster indices against the BSP's cluster count in multi-BSP mode */
 	if (from_cluster_index < 0 ||
 		from_cluster_index >= structure_bsp->clusters.count ||
 		to_cluster_index < 0 ||

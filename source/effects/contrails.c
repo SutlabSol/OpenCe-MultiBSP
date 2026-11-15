@@ -268,6 +268,7 @@ void contrail_delete(
 void contrails_disconnect_from_structure_bsp(
 	void)
 {
+	/* port: preserve contrail point locations across structure BSP transitions */
 	return;
 }
 
@@ -628,6 +629,7 @@ static void contrail_update_points(
 
 			if (!TEST_FLAG(contrail_point->flags, _contrail_point_expired_bit))
 			{
+				/* port: newly created points already entered state 0 in contrail_add_points */
 				if (!TEST_FLAG(contrail_point->flags, _contrail_point_new_bit))
 					contrail_point->time = dt * contrail_point->delta + contrail_point->time;
 
@@ -954,6 +956,7 @@ static void contrail_add_points(
 								t * contrail_point->velocity.k;
 						}
 
+						/* port: advance into the initial point state immediately so points created on a zero-dt frame never render with state_index == NONE */
 						while (contrail_point->delta == 0.0f)
 						{
 							if (TEST_FLAG(contrail_point->flags, _contrail_point_transitioning_bit))

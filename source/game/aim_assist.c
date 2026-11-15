@@ -534,6 +534,7 @@ boolean aim_assist(
 	if (game_modes_aim_assist_off())
 		return FALSE;
 	leaf_index = scenario_leaf_index_from_point(position);
+	/* port: guard leaf_index against the active BSP's leaves count in multi-BSP mode */
 	if (leaf_index != NONE &&
 		VALID_INDEX(leaf_index & LONG_MAX, global_structure_bsp_get()->leaves.count))
 	{
@@ -582,6 +583,7 @@ long player_aim_projectile_preview(
 	struct aim_assist_parameters parameters;
 	short previous_bsp = NONE;
 
+	/* port: in multi-BSP mode, evaluate aim assist in the player unit's BSP context */
 	if (scenario_multi_bsp_active() && player->unit_index != NONE)
 	{
 		short target_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
@@ -713,7 +715,8 @@ long local_player_aim_assist(
 		struct aim_assist_parameters parameters;
 		short previous_bsp = NONE;
 
-		if (scenario_multi_bsp_active() && player->unit_index != NONE)
+		/* port: in multi-BSP mode, evaluate aim assist in the player unit's BSP context */
+	if (scenario_multi_bsp_active() && player->unit_index != NONE)
 		{
 			short target_bsp = object_get_bsp_index(object_get_ultimate_parent(player->unit_index));
 			previous_bsp = scenario_get_active_bsp_index();

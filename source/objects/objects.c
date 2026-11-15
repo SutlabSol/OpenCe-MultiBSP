@@ -764,6 +764,7 @@ short objects_get_activating_cluster_index(
 
 			if (TEST_FLAG(parent_object->object.flags, _object_connected_to_map_bit))
 			{
+				/* port: guard cluster bounds when the object resides in another BSP */
 				if (parent_object->object.location.cluster_index!=NONE &&
 					parent_object->object.location.cluster_index>=0 &&
 					parent_object->object.location.cluster_index<global_structure_bsp_get()->clusters.count)
@@ -2000,6 +2001,7 @@ boolean object_visible_to_any_player(
 
 		const unsigned long* pvs = players_get_combined_pvs();
 
+		/* port: guard cluster bounds across multiple BSPs */
 		for (cluster_index = object_get_first_cluster(&iterator, object_index);
 			cluster_index!=NONE &&
 				(cluster_index < 0 ||
@@ -2157,6 +2159,7 @@ void object_reconnect_to_map(
 		optimising compiler is free to break (release builds crashed placing
 		objects at level start, reading a stack slot reused meanwhile) */
 		struct location bounding_sphere_location;
+		/* port: resolve and bind the object's BSP context when multi-BSP is active */
 		short prev_bsp = scenario_get_active_bsp_index();
 		short obj_bsp = prev_bsp;
 		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
@@ -5692,6 +5695,11 @@ static void object_delete_attachments(
 {
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
+	/* port: clear the deleted object's multi-BSP residence slot */
+	short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+	if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+		object_bsp_index[abs_index] = NONE;
 
 	object_type_definition_get(object->object.type);
 	widgets_delete(object_index);
@@ -5731,14 +5739,6 @@ static void object_delete_recursive(
 		object_disconnect_from_map(object_index);
 	}
 	
-#ifndef unit_get
-	/* port: clear the deleted object's Multi-BSP residence slot */
-	{
-		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
-		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
-			object_bsp_index[abs_index] = NONE;
-	}
-#endif
 	object_type_delete(object_index);
 	object_header_delete(object_header_data, object_index);
 

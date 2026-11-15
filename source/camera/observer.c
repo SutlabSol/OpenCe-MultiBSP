@@ -426,6 +426,7 @@ struct observer_result const *observer_get_camera(
 	return result;
 }
 
+/* port: return the resident BSP index where the local player's camera is located */
 short observer_get_camera_bsp(
 	short local_player_index)
 {

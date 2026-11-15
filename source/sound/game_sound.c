@@ -987,6 +987,11 @@ void compute_sound_obstruction(
 	struct observer_result const *camera = observer_get_camera(local_player_index);
 	long slot = obstruction_cache_slot(local_player_index, &source->location.position);
 	long now = game_time_get();
+	/* port: resolve listener and sound source clusters in the listener's BSP when multi-BSP is active */
+	short previous_bsp = scenario_get_active_bsp_index();
+	short listener_bsp = NONE;
+	short cam_cluster = camera->location.cluster_index;
+	short src_cluster = source->location.game_location.cluster_index;
 
 	if (obstruction_cache[slot].valid &&
 		obstruction_cache[slot].game_time == now &&
@@ -1014,127 +1019,120 @@ void compute_sound_obstruction(
 		887,
 		source->spatialization_mode==_sound_spatialization_mode_absolute);
 
+	if (scenario_multi_bsp_active())
 	{
-		short previous_bsp = scenario_get_active_bsp_index();
-		short listener_bsp = NONE;
-		short cam_cluster = camera->location.cluster_index;
-		short src_cluster = source->location.game_location.cluster_index;
+		struct location loc;
 
-		if (scenario_multi_bsp_active())
+		listener_bsp = observer_get_camera_bsp(local_player_index);
+		if (listener_bsp == NONE || !scenario_bsp_index_is_loaded(listener_bsp))
 		{
-			struct location loc;
-
-			listener_bsp = observer_get_camera_bsp(local_player_index);
-			if (listener_bsp == NONE || !scenario_bsp_index_is_loaded(listener_bsp))
+			listener_bsp = scenario_find_bsp_for_point(&camera->position, &loc);
+		}
+		if (listener_bsp != NONE && scenario_bsp_index_is_loaded(listener_bsp))
+		{
+			scenario_set_active_bsp_context(listener_bsp);
+			if (scenario_test_point_in_bsp(listener_bsp, &camera->position, &loc) && loc.cluster_index != NONE)
 			{
-				listener_bsp = scenario_find_bsp_for_point(&camera->position, &loc);
-			}
-			if (listener_bsp != NONE && scenario_bsp_index_is_loaded(listener_bsp))
-			{
-				scenario_set_active_bsp_context(listener_bsp);
-				if (scenario_test_point_in_bsp(listener_bsp, &camera->position, &loc) && loc.cluster_index != NONE)
-				{
-					cam_cluster = loc.cluster_index;
-				}
-				else
-				{
-					long player_index = local_player_get_player_index(local_player_index);
-					if (player_index != NONE && player_get(player_index)->unit_index != NONE)
-					{
-						long root_index = object_get_ultimate_parent(player_get(player_index)->unit_index);
-						struct object_datum *root_obj = object_get(root_index);
-						if (object_get_bsp_index(root_index) == listener_bsp &&
-							root_obj->object.location.cluster_index != NONE)
-						{
-							cam_cluster = root_obj->object.location.cluster_index;
-						}
-					}
-				}
-
-				if (scenario_test_point_in_bsp(listener_bsp, &source->location.position, &loc) && loc.cluster_index != NONE)
-				{
-					src_cluster = loc.cluster_index;
-				}
-				else
-				{
-					short found_src_bsp = scenario_find_bsp_for_point(&source->location.position, &loc);
-					if (found_src_bsp != NONE && found_src_bsp != listener_bsp)
-					{
-						src_cluster = NONE;
-						source->obstruction = 0.0f;
-						source->occlusion = 0.0f;
-					}
-					else if (src_cluster == NONE || src_cluster < 0 || src_cluster >= global_structure_bsp_get()->clusters.count)
-					{
-						src_cluster = cam_cluster;
-					}
-				}
+				cam_cluster = loc.cluster_index;
 			}
 			else
 			{
-				listener_bsp = NONE;
-			}
-		}
-
-		if (src_cluster != NONE &&
-			cam_cluster != NONE &&
-			src_cluster >= 0 &&
-			src_cluster < global_structure_bsp_get()->clusters.count &&
-			cam_cluster >= 0 &&
-			cam_cluster < global_structure_bsp_get()->clusters.count)
-		{
-			struct structure_bsp *structure_bsp = global_structure_bsp_get();
-			byte encoded_distance = structure_bsp_get_cluster_encoded_sound_distance(
-				structure_bsp,
-				cam_cluster,
-				src_cluster);
-			real cluster_distance = (encoded_distance & ~FLAG(_cluster_sound_distance_unreachable_bit))
-				* (MAXIMUM_CLUSTER_SOUND_DISTANCE / CLUSTER_SOUND_DISTANCE_VALUE_MASK);
-
-			if (cluster_distance < MAXIMUM_CLUSTER_SOUND_DISTANCE)
-			{
-				if (BIT_VECTOR_TEST_FLAG(
-					structure_bsp_get_cluster_pvs(
-						global_structure_bsp_get(),
-						cam_cluster),
-					src_cluster))
+				long player_index = local_player_get_player_index(local_player_index);
+				if (player_index != NONE && player_get(player_index)->unit_index != NONE)
 				{
-					real_vector3d listener_to_source;
-					struct collision_result collision;
-
-					source->obstruction = 0.45f;
-					vector_from_points3d(
-						&camera->position,
-						&source->location.position,
-						&listener_to_source);
-					if (!collision_test_vector(
-						FLAG(_collision_test_front_facing_surfaces_bit) |
-							FLAG(_collision_test_structure_bit) |
-							FLAG(_collision_test_media_bit) |
-							FLAG(_collision_test_objects_bit) |
-							FLAG(_collision_test_objects_scenery_bit) |
-							FLAG(_collision_test_objects_machines_bit),
-						&camera->position,
-						&listener_to_source,
-						NONE,
-						&collision))
+					long root_index = object_get_ultimate_parent(player_get(player_index)->unit_index);
+					struct object_datum *root_obj = object_get(root_index);
+					if (object_get_bsp_index(root_index) == listener_bsp &&
+						root_obj->object.location.cluster_index != NONE)
 					{
-						source->obstruction = 0.0f;
-						source->occlusion = 0.0f;
+						cam_cluster = root_obj->object.location.cluster_index;
 					}
 				}
+			}
 
-				if (source->obstruction != 0.0f)
+			if (scenario_test_point_in_bsp(listener_bsp, &source->location.position, &loc) && loc.cluster_index != NONE)
+			{
+				src_cluster = loc.cluster_index;
+			}
+			else
+			{
+				short found_src_bsp = scenario_find_bsp_for_point(&source->location.position, &loc);
+				if (found_src_bsp != NONE && found_src_bsp != listener_bsp)
 				{
-					source->occlusion = 1.0f - distance / (cluster_distance + distance);
-					source->occlusion = PIN(source->occlusion * 1.4f, 0.0f, 1.0f);
+					src_cluster = NONE;
+					source->obstruction = 0.0f;
+					source->occlusion = 0.0f;
+				}
+				else if (src_cluster == NONE || src_cluster < 0 || src_cluster >= global_structure_bsp_get()->clusters.count)
+				{
+					src_cluster = cam_cluster;
 				}
 			}
 		}
-
-		if (listener_bsp != NONE)
-			scenario_set_active_bsp_context(previous_bsp);
+		else
+		{
+			listener_bsp = NONE;
+		}
 	}
+
+	if (src_cluster != NONE &&
+		cam_cluster != NONE &&
+		src_cluster >= 0 &&
+		src_cluster < global_structure_bsp_get()->clusters.count &&
+		cam_cluster >= 0 &&
+		cam_cluster < global_structure_bsp_get()->clusters.count)
+	{
+		struct structure_bsp *structure_bsp = global_structure_bsp_get();
+		byte encoded_distance = structure_bsp_get_cluster_encoded_sound_distance(
+			structure_bsp,
+			cam_cluster,
+			src_cluster);
+		real cluster_distance = (encoded_distance & ~FLAG(_cluster_sound_distance_unreachable_bit))
+			* (MAXIMUM_CLUSTER_SOUND_DISTANCE / CLUSTER_SOUND_DISTANCE_VALUE_MASK);
+
+		if (cluster_distance < MAXIMUM_CLUSTER_SOUND_DISTANCE)
+		{
+			if (BIT_VECTOR_TEST_FLAG(
+				structure_bsp_get_cluster_pvs(
+					global_structure_bsp_get(),
+					cam_cluster),
+				src_cluster))
+			{
+				real_vector3d listener_to_source;
+				struct collision_result collision;
+
+				source->obstruction = 0.45f;
+				vector_from_points3d(
+					&camera->position,
+					&source->location.position,
+					&listener_to_source);
+				if (!collision_test_vector(
+					FLAG(_collision_test_front_facing_surfaces_bit) |
+						FLAG(_collision_test_structure_bit) |
+						FLAG(_collision_test_media_bit) |
+						FLAG(_collision_test_objects_bit) |
+						FLAG(_collision_test_objects_scenery_bit) |
+						FLAG(_collision_test_objects_machines_bit),
+					&camera->position,
+					&listener_to_source,
+					NONE,
+					&collision))
+				{
+					source->obstruction = 0.0f;
+					source->occlusion = 0.0f;
+				}
+			}
+
+			if (source->obstruction != 0.0f)
+			{
+				source->occlusion = 1.0f - distance / (cluster_distance + distance);
+				source->occlusion = PIN(source->occlusion * 1.4f, 0.0f, 1.0f);
+			}
+		}
+	}
+
+	if (listener_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 
 	match_assert(
 		"c:\\halo\\SOURCE\\sound\\game_sound.c",

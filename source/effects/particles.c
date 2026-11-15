@@ -313,6 +313,7 @@ void particles_stop_on_first_person_weapon(
 void particles_disconnect_from_structure_bsp(
 	void)
 {
+	/* port: preserve particle locations across structure BSP transitions */
 	return;
 }
 
@@ -355,6 +356,7 @@ void particles_reconnect_to_structure_bsp(
 		}
 		else
 		{
+			/* port: in multi-BSP mode, step particle point physics in the particle's BSP context */
 			if (scenario_multi_bsp_active())
 				scenario_find_bsp_for_point(position, &particle->location);
 			else
@@ -666,6 +668,7 @@ static boolean particle_update_physics(
 			short previous_bsp = NONE;
 			short particle_bsp;
 
+			/* port: in multi-BSP mode, step particle point physics in the particle's BSP context */
 			if (scenario_multi_bsp_active())
 			{
 				previous_bsp = scenario_get_active_bsp_index();

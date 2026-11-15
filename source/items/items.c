@@ -803,6 +803,7 @@ boolean item_update(
 				&marker,
 				1);
 
+			/* port: allow checking breakable rested surfaces in any loaded BSP when multi-BSP is active */
 			if (TEST_FLAG(item->item.flags, _item_on_structure_bit) &&
 				item_rested_surface_index(item) != NONE &&
 				(item->item.bsp_index == scenario_get_active_bsp_index() ||

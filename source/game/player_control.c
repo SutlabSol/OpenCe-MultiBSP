@@ -641,6 +641,7 @@ static void handle_one_player_input(
 	long current_weapon_index;
 	short previous_bsp = NONE;
 
+	/* port: in multi-BSP mode, evaluate local player input and aim assist in the player unit's BSP context */
 	if (scenario_multi_bsp_active())
 	{
 		long unit_index = player->unit_index;

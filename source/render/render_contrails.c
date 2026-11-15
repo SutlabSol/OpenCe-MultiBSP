@@ -106,6 +106,7 @@ real contrail_fade(
 
 		vector_from_points3d(world_point, &render.camera.position, &to_camera);
 		mag = magnitude3d(&to_camera);
+		/* port: guard against zero-length camera vector producing NaN in contrail_fade */
 		if (mag > _real_epsilon)
 			result = fabs(dot_product3d(world_normal, &to_camera) / mag);
 		else

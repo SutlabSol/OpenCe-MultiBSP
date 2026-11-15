@@ -1915,29 +1915,11 @@ boolean encounter_spawn_actor(
 {
 	if (ai_globals->ai_initialized_for_map)
 	{
-		struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
-			&global_scenario_get()->ai_encounters, DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index), struct encounter_definition);
-		short previous_bsp = scenario_get_active_bsp_index();
-		short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
-		boolean placed;
-
-		/* port: in Multi-BSP mode, spawn actors in the encounter's BSP context */
-		if (scenario_multi_bsp_active() && encounter_bsp != NONE && scenario_bsp_index_is_loaded(encounter_bsp))
-		{
-			scenario_set_active_bsp_context(encounter_bsp);
-		}
-		else
-		{
-			encounter_bsp = NONE;
-		}
-		placed = encounter_place_actor(encounter_index, squad_index, 0, TRUE, 0);
-		if (encounter_bsp != NONE)
-		{
-			scenario_set_active_bsp_context(previous_bsp);
-		}
-		if (placed)
+		if (encounter_place_actor(encounter_index, squad_index, 0, TRUE, 0))
 		{
 			struct encounter_datum *encounter = encounter_get(encounter_index);
+			struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
+				&global_scenario_get()->ai_encounters, DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index), struct encounter_definition);
 			struct squad_datum *squad = encounter_get_squad(encounter, squad_index);
 			struct squad_definition *squad_definition = TAG_BLOCK_GET_ELEMENT(
 				&encounter_definition->squads, squad_index, struct squad_definition);
@@ -2250,20 +2232,6 @@ void encounter_create(
 			&global_scenario_get()->ai_encounters, DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index), struct encounter_definition);
 		boolean all_squads = desired_platoon_index == NONE && desired_squad_index == NONE;
 		short squad_index;
-#ifndef _error_silent
-		short previous_bsp = scenario_get_active_bsp_index();
-		short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
-
-		/* port: in Multi-BSP mode, place encounter squads using the encounter's BSP context */
-		if (scenario_multi_bsp_active() && encounter_bsp != NONE && scenario_bsp_index_is_loaded(encounter_bsp))
-		{
-			scenario_set_active_bsp_context(encounter_bsp);
-		}
-		else
-		{
-			encounter_bsp = NONE;
-		}
-#endif
 
 		if (ai_debug.print_placement)
 		{
@@ -2381,12 +2349,6 @@ void encounter_create(
 			}
 		}
 
-#ifndef _error_silent
-		if (encounter_bsp != NONE)
-		{
-			scenario_set_active_bsp_context(previous_bsp);
-		}
-#endif
 		encounter_update_status(encounter_index);
 		encounters_test_activation();
 	}
@@ -2692,6 +2654,7 @@ static void encounter_new(
 
 		encounter_definition_fit(encounter_definition, *squad_base, *platoon_base);
 
+		/* port: resolve an encounter's BSP index from its manual setting, firing positions, or squads when multi-BSP is active */
 		if (scenario_multi_bsp_active() &&
 			encounter_definition->runtime_structure_bsp_reference_index == NONE)
 		{

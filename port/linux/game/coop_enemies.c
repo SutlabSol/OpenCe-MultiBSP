@@ -470,9 +470,21 @@ boolean coop_enemies_spread_position(
 {
 	real_point3d from = *origin;
 	real_point3d floor;
-	real floor_height = coop_enemies_floor(origin, &floor) ? floor.z : origin->z;
+	real floor_height;
 	short ring, first_spot = 0;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short target_bsp = NONE;
 
+	if (scenario_multi_bsp_active())
+	{
+		target_bsp = scenario_find_bsp_for_point(origin, NULL);
+		if (target_bsp != NONE && scenario_bsp_index_is_loaded(target_bsp))
+			scenario_set_active_bsp_context(target_bsp);
+		else
+			target_bsp = NONE;
+	}
+
+	floor_height = coop_enemies_floor(origin, &floor) ? floor.z : origin->z;
 	from.z = floor_height + SPREAD_STEP_HEIGHT;
 	for (ring = 0; ring < SPREAD_RINGS; ring++)
 	{
@@ -495,12 +507,18 @@ boolean coop_enemies_spread_position(
 			spot.y += (real)sin(angle) * radius;
 			spot.z = floor_height;
 			if (coop_enemies_spot_free(&from, &spot, floor_height, position))
+			{
+				if (target_bsp != NONE)
+					scenario_set_active_bsp_context(previous_bsp);
 				return TRUE;
+			}
 			if (taken)
 				BIT_VECTOR_SET_FLAG(taken, spot_index, TRUE);
 		}
 		first_spot = (short)(first_spot + place_count);
 	}
+	if (target_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 	return FALSE;
 }
 
@@ -513,6 +531,17 @@ boolean coop_enemies_fallback_position(
 	short place = (short)((number - 1) % SPREAD_PLACES_PER_RING);
 	short ring = (short)((number - 1) / SPREAD_PLACES_PER_RING);
 	short attempt;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short target_bsp = NONE;
+
+	if (scenario_multi_bsp_active())
+	{
+		target_bsp = scenario_find_bsp_for_point(origin, NULL);
+		if (target_bsp != NONE && scenario_bsp_index_is_loaded(target_bsp))
+			scenario_set_active_bsp_context(target_bsp);
+		else
+			target_bsp = NONE;
+	}
 
 	from.z += SPREAD_STEP_HEIGHT;
 	for (attempt = 0; attempt < FALLBACK_RINGS; attempt++, ring++)
@@ -537,9 +566,13 @@ boolean coop_enemies_fallback_position(
 				&to, &down, NONE, &collision))
 		{
 			*position = collision.point;
+			if (target_bsp != NONE)
+				scenario_set_active_bsp_context(previous_bsp);
 			return TRUE;
 		}
 	}
+	if (target_bsp != NONE)
+		scenario_set_active_bsp_context(previous_bsp);
 	return FALSE;
 }
 

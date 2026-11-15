@@ -91,6 +91,7 @@ static boolean warned_about_breakable_surfaces;
 struct breakable_surface_datum *breakable_surface_get(
 	short breakable_surface_index)
 {
+	/* port: index breakable surfaces by the active BSP context so multi-BSP surfaces address their own BSP */
 	short bsp_index = scenario_get_active_bsp_index();
 
 	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 61, globals);
@@ -171,6 +172,7 @@ void breakable_surfaces_reset(
 byte *breakable_surface_flags_get(
 	void)
 {
+	/* port: index breakable surfaces by the active BSP context so multi-BSP surfaces address their own BSP */
 	short bsp_index = scenario_get_active_bsp_index();
 
 	match_assert("c:\\halo\\SOURCE\\physics\\breakable_surfaces.c", 138, globals);
@@ -342,6 +344,7 @@ breakable surface index fit the globals (NONE, no bsp, is not reported) */
 static boolean breakable_surface_indices_valid(
 	short breakable_surface_index)
 {
+	/* port: index breakable surfaces by the active BSP context so multi-BSP surfaces address their own BSP */
 	short bsp_index = scenario_get_active_bsp_index();
 
 	if (bsp_index >= 0 &&
