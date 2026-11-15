@@ -629,7 +629,8 @@ static void contrail_update_points(
 
 			if (!TEST_FLAG(contrail_point->flags, _contrail_point_expired_bit))
 			{
-				contrail_point->time = dt * contrail_point->delta + contrail_point->time;
+				if (!TEST_FLAG(contrail_point->flags, _contrail_point_new_bit))
+					contrail_point->time = dt * contrail_point->delta + contrail_point->time;
 
 				while (contrail_point->delta == 0.0f || contrail_point->time > 1.0f)
 				{
@@ -952,6 +953,61 @@ static void contrail_add_points(
 								t * contrail_point->velocity.j;
 							contrail_point->velocity.k = one_minus_t * previous_contrail_point->velocity.k +
 								t * contrail_point->velocity.k;
+						}
+
+						while (contrail_point->delta == 0.0f)
+						{
+							if (TEST_FLAG(contrail_point->flags, _contrail_point_transitioning_bit))
+							{
+								if (contrail_point->state_index + 1 >= definition->states.count)
+								{
+									SET_FLAG(contrail_point->flags, _contrail_point_expired_bit, TRUE);
+									break;
+								}
+								{
+									struct contrail_point_state *state = TAG_BLOCK_GET_ELEMENT(
+										&definition->states,
+										contrail_point->state_index + 1,
+										struct contrail_point_state);
+
+									contrail_point->state_index++;
+									contrail_point->time = 0.0f;
+									contrail_point->delta = contrail_scale_random_value(
+										contrail_point->density,
+										state->duration_lower_bound,
+										state->duration_upper_bound,
+										state->scale_flags,
+										_contrail_state_duration_bit);
+									if (contrail_point->delta != 0.0f)
+										contrail_point->delta = 1.0f / contrail_point->delta;
+
+									SET_FLAG(contrail_point->flags, _contrail_point_transitioning_bit, FALSE);
+								}
+							}
+							else if (contrail_point->state_index + 1 < definition->states.count)
+							{
+								struct contrail_point_state *state = TAG_BLOCK_GET_ELEMENT(
+									&definition->states,
+									contrail_point->state_index,
+									struct contrail_point_state);
+
+								contrail_point->time = 0.0f;
+								contrail_point->delta = contrail_scale_random_value(
+									contrail_point->density,
+									state->transition_duration_lower_bound,
+									state->transition_duration_upper_bound,
+									state->scale_flags,
+									_contrail_state_transition_duration_bit);
+								if (contrail_point->delta != 0.0f)
+									contrail_point->delta = 1.0f / contrail_point->delta;
+
+								SET_FLAG(contrail_point->flags, _contrail_point_transitioning_bit, TRUE);
+							}
+							else
+							{
+								SET_FLAG(contrail_point->flags, _contrail_point_expired_bit, TRUE);
+								break;
+							}
 						}
 
 						contrail_point->next_contrail_point_index =

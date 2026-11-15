@@ -198,7 +198,7 @@ static void render_contrail(
 				point = datum_get(contrail_point_data, point_index);
 				state = TAG_BLOCK_GET_ELEMENT(
 					&definition->states,
-					point->state_index,
+					PIN(point->state_index, 0, MAX(0, definition->states.count - 1)),
 					struct contrail_point_state);
 				color_scale = 1.f;
 				if (state->scale_flags & (1 << _contrail_state_color_bit))
@@ -212,7 +212,9 @@ static void render_contrail(
 				color.green = (state->color_upper_bound.green - state->color_lower_bound.green) * color_scale + state->color_lower_bound.green;
 				color.blue = (state->color_upper_bound.blue - state->color_lower_bound.blue) * color_scale + state->color_lower_bound.blue;
 
-				if (point->flags & (1 << _contrail_point_transitioning_bit))
+				if ((point->flags & (1 << _contrail_point_transitioning_bit)) &&
+					point->state_index + 1 >= 0 &&
+					point->state_index + 1 < definition->states.count)
 				{
 					struct contrail_point_state *next_state;
 					real transition;

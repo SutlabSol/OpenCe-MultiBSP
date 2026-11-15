@@ -10,6 +10,7 @@ TAG_GROUPS.C
 #include "byte_swapping.h"
 #include "tag_groups.h"
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.c */
 
 /* ---------- constants */
 
@@ -97,7 +98,7 @@ void* tag_data_get_pointer(
 	made for it can hold an offset past a tag data's end, which never
 	stopped a game there: it gets the empty data below without an
 	assertion. This build's maps keep theirs */
-	if (!custom_edition_cache_tags_loaded())
+	if (!custom_edition_cache_tags_loaded() && !mcc_cache_tags_loaded())
 	{
 		match_assert("c:\\halo\\SOURCE\\tag_files\\tag_groups.c", 3073, size>=0);
 		match_assert("c:\\halo\\SOURCE\\tag_files\\tag_groups.c", 3074, offset>=0 && offset+size<=data->size);
@@ -126,7 +127,7 @@ void *tag_block_get_element_with_size(
 	block's end (which Halo PC never checked: foundation@ce, 13 seconds in)
 	gets the empty data below without an assertion. This build's maps keep
 	theirs */
-	if (!custom_edition_cache_tags_loaded())
+	if (!custom_edition_cache_tags_loaded() && !mcc_cache_tags_loaded())
 	{
 		match_vassert("c:\\halo\\SOURCE\\tag_files\\tag_groups.c", 3089, index>=0 && index<block->count,
 			csprintf(temporary,
