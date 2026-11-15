@@ -102,9 +102,16 @@ real contrail_fade(
 	if (fade_mode)
 	{
 		real_vector3d to_camera;
+		real mag;
 
 		vector_from_points3d(world_point, &render.camera.position, &to_camera);
-		result = fabs(dot_product3d(world_normal, &to_camera) / magnitude3d(&to_camera));
+		mag = magnitude3d(&to_camera);
+		if (mag > _real_epsilon)
+			result = fabs(dot_product3d(world_normal, &to_camera) / mag);
+		else
+			result = 0.f;
+		if (isnan(result) || !isfinite(result))
+			result = 0.f;
 
 		if (definition->flags & (1 << _contrail_fades_slowly_bit))
 			result = transition_function_evaluate(2, result);
@@ -185,7 +192,7 @@ static void render_contrail(
 				real width;
 				real_argb_color color;
 				real half_width;
-				real_vector3d orientation;
+				real_vector3d orientation = *global_up3d;
 				real_vector3d facing_normal;
 
 				point = datum_get(contrail_point_data, point_index);
@@ -294,7 +301,8 @@ static void render_contrail(
 							orientation.j = next_point->position.x - point->position.x;
 						}
 						orientation.k = 0.f;
-						normalize3d(&orientation);
+						if (normalize3d(&orientation) == 0.f)
+							orientation = *global_up3d;
 					}
 					break;
 
@@ -367,7 +375,8 @@ static void render_contrail(
 						orientation.i = facing_normal.k * tangent.j - facing_normal.j * tangent.k;
 						orientation.j = facing_normal.i * tangent.k - facing_normal.k * tangent.i;
 						orientation.k = facing_normal.j * tangent.i - facing_normal.i * tangent.j;
-						normalize3d(&orientation);
+						if (normalize3d(&orientation) == 0.f)
+							orientation = *global_up3d;
 					}
 					break;
 				}
@@ -393,7 +402,22 @@ static void render_contrail(
 					shader->framebuffer_fade_mode,
 					&point->position,
 					&orientation);
-				color.alpha = PIN(color.alpha, 0.f, 1.f);
+				if (isnan(color.alpha) || !isfinite(color.alpha))
+					color.alpha = 0.f;
+				else
+					color.alpha = PIN(color.alpha, 0.f, 1.f);
+				if (isnan(color.red) || !isfinite(color.red))
+					color.red = 0.f;
+				else
+					color.red = PIN(color.red, 0.f, 1.f);
+				if (isnan(color.green) || !isfinite(color.green))
+					color.green = 0.f;
+				else
+					color.green = PIN(color.green, 0.f, 1.f);
+				if (isnan(color.blue) || !isfinite(color.blue))
+					color.blue = 0.f;
+				else
+					color.blue = PIN(color.blue, 0.f, 1.f);
 				vertices[0].color = vertices[1].color = real_argb_color_to_pixel32(&color);
 				texture_u += texture_u_step;
 				previous_point = point;

@@ -3869,10 +3869,18 @@ long object_new(
 		if (object_index!=NONE)
 		{
 			short node_count;
+			short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
 
 			struct object_header_datum *object_header = object_header_get(object_index);
 			struct object_datum *object = object_get(object_index);
 			boolean success = TRUE;
+
+			if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+			{
+				object_bsp_index[abs_index] = scenario_multi_bsp_active() ?
+					scenario_get_active_bsp_index() :
+					NONE;
+			}
 
 			SET_FLAG(object_header->flags, _object_header_being_created_bit, TRUE);
 			SET_FLAG(object_header->flags, _object_header_automatically_deactivate_bit, TRUE);
@@ -4051,6 +4059,8 @@ long object_new(
 
 			if (!success)
 			{
+				if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+					object_bsp_index[abs_index] = NONE;
 				object_type_delete(object_index);
 				object_header_delete(object_header_data, object_index);
 				object_index = NONE;
@@ -4361,7 +4371,34 @@ long object_new_from_scenario(
 					&scenario_object->rotation);
 				placement_data.variant_number = scenario_object->variant_number;
 				
-				result = object_new(&placement_data);
+				{
+					short previous_bsp = scenario_get_active_bsp_index();
+					short target_bsp = NONE;
+
+					if (scenario_multi_bsp_active() &&
+						scenario_object->on_bsp_flags != 0 &&
+						(previous_bsp == NONE || !TEST_FLAG(scenario_object->on_bsp_flags, previous_bsp)))
+					{
+						short bsp_i;
+						short bsp_count = (short)MIN(global_scenario_get()->structure_bsp_references.count, MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO);
+						for (bsp_i = 0; bsp_i < bsp_count; bsp_i++)
+						{
+							if (TEST_FLAG(scenario_object->on_bsp_flags, bsp_i) &&
+								scenario_bsp_index_is_loaded(bsp_i))
+							{
+								target_bsp = bsp_i;
+								break;
+							}
+						}
+						if (target_bsp != NONE)
+							scenario_set_active_bsp_context(target_bsp);
+					}
+
+					result = object_new(&placement_data);
+
+					if (target_bsp != NONE && scenario_bsp_index_is_loaded(previous_bsp))
+						scenario_set_active_bsp_context(previous_bsp);
+				}
 				if (result!=NONE)
 				{
 					object_type_place(result, scenario_object);
@@ -5694,6 +5731,11 @@ static void object_delete_recursive(
 		object_disconnect_from_map(object_index);
 	}
 	
+	{
+		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
+			object_bsp_index[abs_index] = NONE;
+	}
 	object_type_delete(object_index);
 	object_header_delete(object_header_data, object_index);
 

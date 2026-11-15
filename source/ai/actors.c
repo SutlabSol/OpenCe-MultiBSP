@@ -2648,6 +2648,29 @@ long actor_create_for_unit(
 
 			if (actor_index != NONE)
 			{
+				if (scenario_multi_bsp_active() && encounter_index != NONE)
+				{
+					struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
+						&global_scenario_get()->ai_encounters,
+						DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index),
+						struct encounter_definition);
+					short encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
+
+					if (encounter_bsp == NONE &&
+						TEST_FLAG(encounter_definition->flags, _encounter_manual_structure_bsp_index_bit))
+					{
+						encounter_bsp = encounter_definition->manual_structure_bsp_reference_index;
+					}
+					if (encounter_bsp != NONE && scenario_bsp_index_is_loaded(encounter_bsp))
+					{
+						long root_object_index = object_get_ultimate_parent(unit_index);
+						if (object_get_bsp_index(root_object_index) != encounter_bsp)
+						{
+							object_switch_bsp(root_object_index, encounter_bsp);
+						}
+					}
+				}
+
 				if (swarm)
 				{
 					if (!actor_swarm_attach_unit(actor_index, unit_index))
@@ -2686,12 +2709,32 @@ long actor_place(
 	struct object_placement_data placement_data;
 	char encounter_name[256];
 	long unit_index;
+	short previous_bsp = scenario_get_active_bsp_index();
+	short encounter_bsp = NONE;
 
 	match_assert("c:\\halo\\SOURCE\\ai\\actors.c", 603, starting_location);
 	/* port: none on a client of the distributed netcode (actor_new) */
 	if (network_game_distributed_client())
 		return NONE;
 	objects_garbage_collection();
+
+	if (scenario_multi_bsp_active() && encounter_index != NONE)
+	{
+		struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
+			&global_scenario_get()->ai_encounters,
+			DATUM_INDEX_TO_ABSOLUTE_INDEX(encounter_index),
+			struct encounter_definition);
+		encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
+		if (encounter_bsp == NONE &&
+			TEST_FLAG(encounter_definition->flags, _encounter_manual_structure_bsp_index_bit))
+		{
+			encounter_bsp = encounter_definition->manual_structure_bsp_reference_index;
+		}
+		if (encounter_bsp != NONE && scenario_bsp_index_is_loaded(encounter_bsp))
+			scenario_set_active_bsp_context(encounter_bsp);
+		else
+			encounter_bsp = NONE;
+	}
 
 	actor_variant_definition =
 		actor_variant_definition_get(actor_variant_definition_index);
@@ -2720,6 +2763,8 @@ long actor_place(
 	unit_index = object_new(&placement_data);
 	if (unit_index == NONE)
 	{
+		if (encounter_bsp != NONE && scenario_bsp_index_is_loaded(previous_bsp))
+			scenario_set_active_bsp_context(previous_bsp);
 		if (encounter_index == NONE)
 		{
 			csstrcpy(encounter_name, "<encounterless>");
@@ -2847,6 +2892,9 @@ long actor_place(
 		{
 			actor_verify_activation(actor_index);
 		}
+
+		if (encounter_bsp != NONE && scenario_bsp_index_is_loaded(previous_bsp))
+			scenario_set_active_bsp_context(previous_bsp);
 
 		return actor_index;
 	}
@@ -4248,17 +4296,42 @@ static void actor_update(
 	if (scenario_multi_bsp_active())
 	{
 		long check_unit_index = actor->meta.swarm ? actor->meta.swarm_unit_index : actor->meta.unit_index;
-		if (check_unit_index != NONE && object_try_and_get(check_unit_index))
-		{
-			actor_bsp = object_get_bsp_index(object_get_ultimate_parent(check_unit_index));
-		}
-		if (actor_bsp == NONE && actor->meta.encounter_index != NONE)
+		short encounter_bsp = NONE;
+
+		if (actor->meta.encounter_index != NONE)
 		{
 			struct encounter_definition *encounter_definition = TAG_BLOCK_GET_ELEMENT(
 				&global_scenario_get()->ai_encounters,
 				DATUM_INDEX_TO_ABSOLUTE_INDEX(actor->meta.encounter_index),
 				struct encounter_definition);
-			actor_bsp = encounter_definition->runtime_structure_bsp_reference_index;
+			encounter_bsp = encounter_definition->runtime_structure_bsp_reference_index;
+			if (encounter_bsp == NONE &&
+				TEST_FLAG(encounter_definition->flags, _encounter_manual_structure_bsp_index_bit))
+			{
+				encounter_bsp = encounter_definition->manual_structure_bsp_reference_index;
+			}
+		}
+
+		if (check_unit_index != NONE && object_try_and_get(check_unit_index))
+		{
+			long root_object_index = object_get_ultimate_parent(check_unit_index);
+			actor_bsp = object_get_bsp_index(root_object_index);
+			if (encounter_bsp != NONE &&
+				scenario_bsp_index_is_loaded(encounter_bsp) &&
+				actor_bsp != encounter_bsp &&
+				(root_object_index == check_unit_index ||
+					!object_try_and_get_and_verify_type(root_object_index, _object_mask_unit) ||
+					unit_get(root_object_index)->unit.driver_object_index == NONE ||
+					unit_get(unit_get(root_object_index)->unit.driver_object_index)->unit.player_index == NONE) &&
+				scenario_test_point_in_bsp(encounter_bsp, &object_get(root_object_index)->object.bounding_sphere_center, NULL))
+			{
+				object_switch_bsp(root_object_index, encounter_bsp);
+				actor_bsp = encounter_bsp;
+			}
+		}
+		if (actor_bsp == NONE)
+		{
+			actor_bsp = encounter_bsp;
 		}
 		if (actor_bsp != NONE && scenario_bsp_index_is_loaded(actor_bsp))
 		{

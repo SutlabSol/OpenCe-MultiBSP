@@ -46,6 +46,26 @@ __inline pixel32 real_argb_color_to_pixel32(
 {
 	real scale = 255.0f;
 	pixel32 result;
+	real_argb_color safe_color = *color;
+
+	/* port: guard against NaN / out-of-range color channels (e.g. contrail fade 0/0 on reflection) */
+	if (isnan(safe_color.alpha) || !isfinite(safe_color.alpha))
+		safe_color.alpha = 0.0f;
+	else
+		safe_color.alpha = PIN(safe_color.alpha, 0.0f, 1.0f);
+	if (isnan(safe_color.red) || !isfinite(safe_color.red))
+		safe_color.red = 0.0f;
+	else
+		safe_color.red = PIN(safe_color.red, 0.0f, 1.0f);
+	if (isnan(safe_color.green) || !isfinite(safe_color.green))
+		safe_color.green = 0.0f;
+	else
+		safe_color.green = PIN(safe_color.green, 0.0f, 1.0f);
+	if (isnan(safe_color.blue) || !isfinite(safe_color.blue))
+		safe_color.blue = 0.0f;
+	else
+		safe_color.blue = PIN(safe_color.blue, 0.0f, 1.0f);
+	color = &safe_color;
 
 	match_vassert(
 		"..\\bitmaps\\bitmaps_inlines.h",
@@ -96,6 +116,21 @@ __inline pixel32 real_rgb_color_to_pixel32(
 {
 	pixel32 result;
 	real scale = (real)UNSIGNED_CHAR_MAX;
+	real_rgb_color safe_color = *color;
+
+	if (isnan(safe_color.red) || !isfinite(safe_color.red))
+		safe_color.red = 0.0f;
+	else
+		safe_color.red = PIN(safe_color.red, 0.0f, 1.0f);
+	if (isnan(safe_color.green) || !isfinite(safe_color.green))
+		safe_color.green = 0.0f;
+	else
+		safe_color.green = PIN(safe_color.green, 0.0f, 1.0f);
+	if (isnan(safe_color.blue) || !isfinite(safe_color.blue))
+		safe_color.blue = 0.0f;
+	else
+		safe_color.blue = PIN(safe_color.blue, 0.0f, 1.0f);
+	color = &safe_color;
 
 	match_assert_valid_real_rgb_color("..\\bitmaps\\bitmaps_inlines.h", 0xC9, color);
 
@@ -116,6 +151,11 @@ __inline pixel32 real_alpha_to_pixel32(
 {
 	real scale = 255.0f;
 	pixel32 result;
+
+	if (isnan(alpha) || !isfinite(alpha))
+		alpha = 0.0f;
+	else
+		alpha = PIN(alpha, 0.0f, 1.0f);
 
 	match_assert(
 		"..\\bitmaps\\bitmaps_inlines.h",

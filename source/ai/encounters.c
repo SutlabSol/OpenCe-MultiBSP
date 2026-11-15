@@ -678,6 +678,13 @@ void encounter_compute_activation_cluster_bit_vector(
 				unit = unit_get(unit_index);
 				ultimate_parent_index = object_get_ultimate_parent(unit_index);
 				parent_object = object_get(ultimate_parent_index);
+				if (scenario_multi_bsp_active() &&
+					object_get_bsp_index(ultimate_parent_index) != scenario_get_active_bsp_index() &&
+					ultimate_parent_index == unit_index &&
+					scenario_test_point_in_bsp(scenario_get_active_bsp_index(), &parent_object->object.bounding_sphere_center, NULL))
+				{
+					object_switch_bsp(ultimate_parent_index, scenario_get_active_bsp_index());
+				}
 				cluster_index = parent_object->object.location.cluster_index;
 
 				/* port: guard cluster_index against structure_bsp cluster count in Multi-BSP mode */
@@ -694,6 +701,23 @@ void encounter_compute_activation_cluster_bit_vector(
 					if (active_area && BIT_VECTOR_TEST_FLAG(active_area, cluster_index))
 						dormant_desire = FALSE;
 				}
+				else if (scenario_multi_bsp_active() && cluster_index != NONE)
+				{
+					short unit_bsp = object_get_bsp_index(ultimate_parent_index);
+					struct structure_bsp *unit_structure_bsp = scenario_structure_bsp_get_by_index(unit_bsp);
+
+					if (unit_structure_bsp &&
+						players_any_player_in_bsp(unit_bsp) &&
+						cluster_index >= 0 && cluster_index < unit_structure_bsp->clusters.count)
+					{
+						unsigned long unit_bsp_pvs[MAXIMUM_CLUSTERS_PER_STRUCTURE / 32];
+						if (players_compute_combined_pvs_for_bsp(unit_bsp, unit_bsp_pvs) &&
+							BIT_VECTOR_TEST_FLAG(unit_bsp_pvs, cluster_index))
+						{
+							dormant_desire = FALSE;
+						}
+					}
+				}
 
 				unit_index = unit->unit.swarm_next_unit_index;
 			}
@@ -707,6 +731,16 @@ void encounter_compute_activation_cluster_bit_vector(
 			unit = unit_get(actor->meta.unit_index);
 			ultimate_parent_index = object_get_ultimate_parent(actor->meta.unit_index);
 			parent_object = object_get(ultimate_parent_index);
+			if (scenario_multi_bsp_active() &&
+				object_get_bsp_index(ultimate_parent_index) != scenario_get_active_bsp_index() &&
+				(ultimate_parent_index == actor->meta.unit_index ||
+					!object_try_and_get_and_verify_type(ultimate_parent_index, _object_mask_unit) ||
+					unit_get(ultimate_parent_index)->unit.driver_object_index == NONE ||
+					unit_get(unit_get(ultimate_parent_index)->unit.driver_object_index)->unit.player_index == NONE) &&
+				scenario_test_point_in_bsp(scenario_get_active_bsp_index(), &parent_object->object.bounding_sphere_center, NULL))
+			{
+				object_switch_bsp(ultimate_parent_index, scenario_get_active_bsp_index());
+			}
 			cluster_index = parent_object->object.location.cluster_index;
 			/* port: guard cluster_index against structure_bsp cluster count in Multi-BSP mode */
 			if (cluster_index != NONE &&
@@ -721,6 +755,23 @@ void encounter_compute_activation_cluster_bit_vector(
 				BIT_VECTOR_SET_FLAG(bit_vector, cluster_index, TRUE);
 				if (active_area && BIT_VECTOR_TEST_FLAG(active_area, cluster_index))
 					dormant_desire = FALSE;
+			}
+			else if (scenario_multi_bsp_active() && cluster_index != NONE)
+			{
+				short unit_bsp = object_get_bsp_index(ultimate_parent_index);
+				struct structure_bsp *unit_structure_bsp = scenario_structure_bsp_get_by_index(unit_bsp);
+
+				if (unit_structure_bsp &&
+					players_any_player_in_bsp(unit_bsp) &&
+					cluster_index >= 0 && cluster_index < unit_structure_bsp->clusters.count)
+				{
+					unsigned long unit_bsp_pvs[MAXIMUM_CLUSTERS_PER_STRUCTURE / 32];
+					if (players_compute_combined_pvs_for_bsp(unit_bsp, unit_bsp_pvs) &&
+						BIT_VECTOR_TEST_FLAG(unit_bsp_pvs, cluster_index))
+					{
+						dormant_desire = FALSE;
+					}
+				}
 			}
 
 			if (encounter->active)
@@ -2636,6 +2687,51 @@ static void encounter_new(
 		short platoon_index;
 
 		encounter_definition_fit(encounter_definition, *squad_base, *platoon_base);
+
+		if (scenario_multi_bsp_active() &&
+			encounter_definition->runtime_structure_bsp_reference_index == NONE)
+		{
+			if (TEST_FLAG(encounter_definition->flags, _encounter_manual_structure_bsp_index_bit) &&
+				scenario_bsp_index_is_loaded(encounter_definition->manual_structure_bsp_reference_index))
+			{
+				encounter_definition->runtime_structure_bsp_reference_index =
+					encounter_definition->manual_structure_bsp_reference_index;
+			}
+			else if (encounter_definition->firing_positions.count > 0)
+			{
+				struct firing_position_definition *fp = TAG_BLOCK_GET_ELEMENT(
+					&encounter_definition->firing_positions,
+					0,
+					struct firing_position_definition);
+				short resolved_bsp = scenario_find_bsp_for_point(&fp->position, NULL);
+				if (resolved_bsp != NONE)
+					encounter_definition->runtime_structure_bsp_reference_index = resolved_bsp;
+			}
+			if (encounter_definition->runtime_structure_bsp_reference_index == NONE)
+			{
+				short sq_i;
+				for (sq_i = 0; sq_i < encounter_definition->squads.count; sq_i++)
+				{
+					struct squad_definition *sq_def = TAG_BLOCK_GET_ELEMENT(
+						&encounter_definition->squads,
+						sq_i,
+						struct squad_definition);
+					if (sq_def->starting_locations.count > 0)
+					{
+						struct actor_starting_location *sl = TAG_BLOCK_GET_ELEMENT(
+							&sq_def->starting_locations,
+							0,
+							struct actor_starting_location);
+						short resolved_bsp = scenario_find_bsp_for_point(&sl->position, NULL);
+						if (resolved_bsp != NONE)
+						{
+							encounter_definition->runtime_structure_bsp_reference_index = resolved_bsp;
+							break;
+						}
+					}
+				}
+			}
+		}
 
 		encounter->team_index = encounter_definition->team_index;
 		encounter->first_actor_index = NONE;

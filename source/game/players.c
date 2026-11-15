@@ -4086,7 +4086,7 @@ void players_reconnect_to_structure_bsp(
 
 				if (obj_bsp != global_structure_bsp_index)
 				{
-					if ((!from_trigger && !network_coop_active() &&
+					if ((!from_trigger &&
 							scenario_test_point_in_bsp(global_structure_bsp_index, &root_object->object.bounding_sphere_center, NULL)) ||
 						!scenario_test_point_in_bsp(obj_bsp, &root_object->object.bounding_sphere_center, NULL))
 					{
@@ -5699,6 +5699,8 @@ void players_update_after_game(
 			if (scenario_multi_bsp_active() &&
 				!TEST_FLAG(root_object->object.flags, _object_outside_of_map_bit))
 			{
+				boolean switched_bsp = FALSE;
+
 				scenario = global_scenario_get();
 				for (bsp_switch_trigger_volume_index = 0;
 					bsp_switch_trigger_volume_index < scenario->bsp_switch_trigger_volumes.count;
@@ -5720,6 +5722,7 @@ void players_update_after_game(
 							bsp_switch_trigger_volume->destination_structure_bsp_index);
 						player_bsp = object_get_bsp_index(root_object_index);
 						player->cluster_index = root_object->object.location.cluster_index;
+						switched_bsp = TRUE;
 
 						if (!(network_coop_active() && network_game_distributed_client()) &&
 							bsp_switch_trigger_volume->destination_structure_bsp_index != global_structure_bsp_index &&
@@ -5737,6 +5740,27 @@ void players_update_after_game(
 						}
 						break;
 					}
+				}
+
+				if (!switched_bsp &&
+					(!scenario_bsp_index_is_loaded(player_bsp) ||
+						!scenario_test_point_in_bsp(player_bsp, &root_object->object.bounding_sphere_center, NULL)))
+				{
+					short found_bsp = scenario_find_bsp_for_point(&root_object->object.bounding_sphere_center, NULL);
+					if (found_bsp == NONE)
+						found_bsp = scenario_find_bsp_for_point(&root_object->object.position, NULL);
+					if (found_bsp != NONE && found_bsp != player_bsp)
+					{
+						object_switch_bsp(root_object_index, found_bsp);
+						player_bsp = object_get_bsp_index(root_object_index);
+						player->cluster_index = root_object->object.location.cluster_index;
+						switched_bsp = TRUE;
+					}
+				}
+
+				if (switched_bsp)
+				{
+					players_update_multi_bsp_pvs();
 				}
 			}
 			/* port: a co-op client only switches BSP when the host does
