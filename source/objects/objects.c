@@ -253,10 +253,20 @@ short object_get_bsp_index(
 	if (root_index == NONE)
 		root_index = object_index;
 	abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(root_index);
-	if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP &&
-		scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+	if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
 	{
-		return object_bsp_index[abs_index];
+		if (!scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+		{
+			struct object_datum *root_object = object_try_and_get(root_index);
+
+			if (root_object && root_object->object.pad[0] > 0 &&
+				scenario_bsp_index_is_loaded((short)(root_object->object.pad[0] - 1)))
+			{
+				object_bsp_index[abs_index] = (short)(root_object->object.pad[0] - 1);
+			}
+		}
+		if (scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+			return object_bsp_index[abs_index];
 	}
 	return global_structure_bsp_index_get();
 }
@@ -270,6 +280,8 @@ static void object_set_bsp_index_recursive(
 		struct object_datum *object = object_get(object_index);
 		short abs_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
 
+		object->object.pad[0] = (bsp_index >= 0 && bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO) ?
+			(byte)(bsp_index + 1) : 0;
 		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
 			object_bsp_index[abs_index] = bsp_index;
 		if (object->object.first_child_object_index != NONE)
@@ -304,6 +316,8 @@ boolean object_switch_bsp(
 		object_disconnect_from_map(root_index);
 
 	object_bsp_index[abs_index] = new_bsp_index;
+	root_object->object.pad[0] = (new_bsp_index >= 0 && new_bsp_index < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO) ?
+		(byte)(new_bsp_index + 1) : 0;
 	if (root_object->object.first_child_object_index != NONE)
 		object_set_bsp_index_recursive(root_object->object.first_child_object_index, new_bsp_index);
 
@@ -1751,7 +1765,11 @@ void object_function_inputs_forget(
 	long index;
 
 	for (index = 0; index < MAXIMUM_OBJECTS_PER_MAP; index++)
+	{
 		object_function_inputs[index].object_index = NONE;
+		/* port: clear cached BSP indices so a loaded game_state restores each object's BSP from object->object.pad[0] */
+		object_bsp_index[index] = NONE;
+	}
 }
 
 void object_function_values_for_render(
@@ -2167,11 +2185,11 @@ void object_reconnect_to_map(
 		if (scenario_multi_bsp_active())
 		{
 			short found_bsp;
+			short stored_bsp = object_get_bsp_index(object_index);
 
-			if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP &&
-				scenario_bsp_index_is_loaded(object_bsp_index[abs_index]))
+			if (scenario_bsp_index_is_loaded(stored_bsp))
 			{
-				obj_bsp = object_bsp_index[abs_index];
+				obj_bsp = stored_bsp;
 				scenario_set_active_bsp_context(obj_bsp);
 			}
 
@@ -2217,6 +2235,8 @@ void object_reconnect_to_map(
 		if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
 		{
 			object_bsp_index[abs_index] = obj_bsp;
+			object->object.pad[0] = (obj_bsp >= 0 && obj_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO) ?
+				(byte)(obj_bsp + 1) : 0;
 			if (object->object.first_child_object_index != NONE)
 				object_set_bsp_index_recursive(object->object.first_child_object_index, obj_bsp);
 		}
@@ -3880,9 +3900,12 @@ long object_new(
 
 			if (abs_index >= 0 && abs_index < MAXIMUM_OBJECTS_PER_MAP)
 			{
-				object_bsp_index[abs_index] = scenario_multi_bsp_active() ?
+				short init_bsp = scenario_multi_bsp_active() ?
 					scenario_get_active_bsp_index() :
 					NONE;
+				object_bsp_index[abs_index] = init_bsp;
+				object->object.pad[0] = (init_bsp >= 0 && init_bsp < MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO) ?
+					(byte)(init_bsp + 1) : 0;
 			}
 
 			SET_FLAG(object_header->flags, _object_header_being_created_bit, TRUE);

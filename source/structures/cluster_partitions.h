@@ -35,10 +35,6 @@ struct cluster_partition
 	of them), for what is kept of them while they don't change
 	(object_lights.c's lights_port_cluster) */
 	unsigned long port_modification_count;
-	/* port: per-BSP cluster reference lists so objects and lights in multiple loaded
-	BSPs do not collide on cluster indices 0..N-1 */
-	long *port_bsp_cluster_first_data_references[16];
-	short *port_cluster_reference_bsp;
 };
 
 /* ---------- prototypes/CLUSTER_PARTITIONS.C */

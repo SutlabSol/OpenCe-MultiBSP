@@ -1293,6 +1293,7 @@ boolean scenario_switch_structure_bsp(
 		neither unloads the previous BSP nor disconnects objects/AI/lights in other BSPs */
 		if (scenario_multi_bsp_enabled && scenario_loaded_structure_bsps[structure_bsp_index])
 		{
+			had_old_structure_bsp = (global_structure_bsp_index != NONE);
 			main_stop_time();
 			collision_log_enable(FALSE);
 
@@ -1305,11 +1306,14 @@ boolean scenario_switch_structure_bsp(
 			active_structure_bsp_index = structure_bsp_index;
 			structure_culling_structure_bsp_loaded();
 
-			object_types_reconnect_to_structure_bsp();
-			ai_reconnect_to_structure_bsp();
-			observer_reconnect_to_structure_bsp();
-			players_reconnect_to_structure_bsp();
-			sound_reconnect_to_structure_bsp();
+			if (had_old_structure_bsp)
+			{
+				object_types_reconnect_to_structure_bsp();
+				ai_reconnect_to_structure_bsp();
+				observer_reconnect_to_structure_bsp();
+				players_reconnect_to_structure_bsp();
+				sound_reconnect_to_structure_bsp();
+			}
 
 			collision_log_enable(TRUE);
 			main_start_time();

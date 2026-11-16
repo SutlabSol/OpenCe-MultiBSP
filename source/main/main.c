@@ -1826,10 +1826,10 @@ static void main_native_build_label(char *label, size_t capacity)
 	platform = "Linux";
 	#endif
 	if (HALO_BUILD_NUMBER > 0)
-		_snprintf(label, capacity - 1, "OpenCE %s | Multi-BSP v0.1.12 | build %d (%s)",
+		_snprintf(label, capacity - 1, "OpenCE %s | Multi-BSP v0.1.13 | build %d (%s)",
 			platform, HALO_BUILD_NUMBER, HALO_BUILD_FLAVOR);
 	else
-		_snprintf(label, capacity - 1, "OpenCE %s | Multi-BSP v0.1.12 (%s)",
+		_snprintf(label, capacity - 1, "OpenCE %s | Multi-BSP v0.1.13 (%s)",
 			platform, HALO_BUILD_FLAVOR);
 	label[capacity - 1] = 0;
 }
